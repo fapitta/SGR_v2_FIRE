@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SGR Intelligence - Healthcare Analytics</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+KR:wght@300;400;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+
+    <style>
+        .category-tab {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-glass);
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 600;
+        }
+
+        .category-tab:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .category-tab.active {
+            background: #6366f1;
+            color: white;
+            border-color: #6366f1;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+        }
+
+        .sheet-tabs {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+        }
+
+        .sheet-tabs::-webkit-scrollbar {
+            height: 4px;
+        }
+
+        .sheet-tabs::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar glass">
+            <div class="brand" style="cursor: pointer;" onclick="location.href='/'">
+                <span>🛡️</span> SGR Intelligence
+            </div>
+            <nav class="nav-menu">
+                <li class="nav-item active" onclick="switchTab('dashboard')"><span>📊</span> 대시보드</li>
+                <li class="nav-item" onclick="switchTab('raw-data-view')"><span>🔍</span> 원시자료 확인/검증</li>
+                <li class="nav-item" onclick="switchTab('data-entry')"><span>🛠️</span> 시뮬레이션 데이터 수정</li>
+                <li class="nav-item" onclick="switchTab('detailed-stats')"><span>📑</span> 세부 산출 내역</li>
+                <li class="nav-item" onclick="switchTab('analysis-report')"><span>📈</span> 경향성 분석 리포트</li>
+            </nav>
+            <div style="margin-top: auto; display: flex; flex-direction: column; gap: 0.5rem;">
+                <button class="glass-btn" style="width: 100%; text-align: left;" onclick="location.href='/'">🏠 모형 선택으로
+                    돌아가기</button>
+                <button class="primary" style="width: 100%;" onclick="exportExcel()">💾 엑셀 보고서 다운로드</button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- TAB: Dashboard -->
+            <section id="dashboard" class="tab-content active">
+                <div class="header-section"
+                    style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div>
+                        <h1 style="font-weight: 800; font-size: 2.5rem; letter-spacing: -1px;">분석 대시보드</h1>
+                        <div
+                            style="display: flex; gap: 1rem; align-items: center; margin-top: 0.5rem; flex-wrap: wrap;">
+                            <p style="color: var(--text-secondary);">환산지수 조정률 및 거시 지표 시뮬레이션</p>
+
+                            <div
+                                style="display: flex; gap: 0.5rem; align-items: center; background: rgba(255,255,255,0.05); padding: 0.3rem 0.8rem; border-radius: 10px; border: 1px solid var(--border-glass);">
+                                <label style="font-size: 0.8rem; font-weight: 700; color: var(--accent-primary);">분석
+                                    모형:</label>
+                                <select id="dashboardModelSelector"
+                                    style="width: auto; padding: 0.2rem 0.5rem; border: none; background: transparent; color: var(--text-primary); cursor: pointer;"
+                                    onchange="updateModelSelection()">
+                                    <option value="S1">현행 SGR 모형 (S1)</option>
+                                    <option value="S2" selected>개선 SGR 모형 (S2)</option>
+                                    <option value="GDP">GDP 성장률 모형</option>
+                                    <option value="MEI">MEI 모형 (유형별)</option>
+                                    <option value="Link">거시지표 연계 모형</option>
+
+                                </select>
+                            </div>
+
+                            <div
+                                style="display: flex; gap: 0.5rem; align-items: center; background: rgba(255,255,255,0.05); padding: 0.3rem 0.8rem; border-radius: 10px; border: 1px solid var(--border-glass);">
+                                <label style="font-size: 0.8rem; font-weight: 700; color: var(--accent-secondary);">기준
+                                    연도:</label>
+                                <select id="dashboardYearSelector"
+                                    style="width: auto; padding: 0.2rem 0.5rem; border: none; background: transparent; color: var(--text-primary); cursor: pointer;"
+                                    onchange="renderCharts(); renderInsightReport();">
+                                    <!-- Populated by JS -->
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 0.8rem; height: fit-content;">
+                        <button class="glass-btn highlight-btn" onclick="switchTab('data-entry')"
+                            style="border: 1.5px solid var(--accent-primary); background: rgba(99, 102, 241, 0.1);">
+                            📋 분석에 사용된 기초자료 보기/수정
+                        </button>
+                        <div class="live-status glass"
+                            style="padding: 0.5rem 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; font-weight: 600;">
+                            <span
+                                style="width: 8px; height: 8px; background: #fbbf24; border-radius: 50%; box-shadow: 0 0 10px #fbbf24; animation: pulse 2s infinite;"></span>
+                            LIVE CALCULATION ENABLED
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid">
+                    <div class="card glass" style="grid-column: span 2;">
+                        <h3>📊 모형별 최종 조정률 비교 (Selected Year)</h3>
+                        <div id="dashboardComparisonContainer" style="margin-top: 1rem; overflow-x: auto;">
+                            <!-- Comparison table will be injected here -->
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid" style="margin-top: 2rem;">
+                    <div class="card glass expandable" onclick="expandChart('mainTrendsChart', '조정률 추세 (%)')">
+                        <h3>조정률 추세 (%) - <span id="trendModelLabel">SGR 개선(S2)</span></h3>
+                        <div class="chart-container">
+                            <canvas id="mainTrendsChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="card glass expandable" onclick="expandChart('rankStreamChart', '유형별 등위 변화')">
+                        <h3>유형별 등위 변화</h3>
+                        <div class="chart-container">
+                            <canvas id="rankStreamChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid" style="margin-top: 2rem;">
+                    <div class="card glass expandable" style="grid-column: span 2;"
+                        onclick="expandChart('typeCompareChart', '유형별 상세 조정률 (Bar)')">
+                        <h3>유형별 상세 조정률 (Bar Chart)</h3>
+                        <div class="chart-container" style="height: 300px;">
+                            <canvas id="typeCompareChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: Raw Data View -->
+            <section id="raw-data-view" class="tab-content">
+                <div class="header-section"
+                    style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div>
+                        <h1 style="font-weight: 800; font-size: 2rem;">원시자료 확인 및 검증 (Raw Data)</h1>
+                        <p style="color: var(--text-secondary);">Excel 파일에서 읽어온 원본 시트별 데이터를 확인합니다.</p>
+                    </div>
+                    <button class="primary" onclick="initRawDataView()">🔄 데이터 새로고침</button>
+                </div>
+
+                <div id="rawDataContainer" style="margin-top: 2rem;">
+                    <!-- Raw Excel Sheets will be injected here -->
+                    <div class="glass" style="padding: 3rem; text-align: center;">
+                        <div class="spinner"></div>
+                        <p style="margin-top: 1rem;">원시 데이터를 로드하고 있습니다...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: Data Entry -->
+            <section id="data-entry" class="tab-content">
+                <div class="header-section"
+                    style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div>
+                        <h1 style="font-weight: 800; font-size: 2rem;">기초자료 입력 (Basic Data)</h1>
+                        <p style="color: var(--text-secondary);">2010년부터 2028년까지의 기초 데이터를 확인하고 수정할 수 있습니다.</p>
+                        <div
+                            style="margin-top: 1rem; padding: 1rem; background: rgba(245, 158, 11, 0.1); border-left: 4px solid var(--warning); border-radius: 8px;">
+                            <strong>💡 정보:</strong> 2022년 이후 자료부터 수정 가능합니다.
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 0.8rem; flex-direction: column; align-items: flex-end;">
+                        <button class="primary"
+                            style="background: var(--success); border-color: var(--success); box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2); padding: 0.5rem 1rem; font-size: 0.85rem;"
+                            onclick="saveAllToExcelFile()">
+                            💾 전체 자료 엑셀 원본에 저장 (Update SGR_data)
+                        </button>
+                        <button class="glass-btn" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;"
+                            onclick="location.href='/'">🏠 첫 화면으로 이동</button>
+                    </div>
+                </div>
+
+                <!-- Data Category Tabs -->
+                <div class="data-category-tabs glass"
+                    style="margin-top: 1.5rem; padding: 1rem; display: flex; gap: 0.5rem; overflow-x: auto;">
+                    <button class="category-tab active" onclick="switchDataCategory('medical', this)">💊 진료비_실제</button>
+                    <button class="category-tab" onclick="switchDataCategory('weights', this)">⚖️ 종별비용구조</button>
+                    <button class="category-tab" onclick="switchDataCategory('mei', this)">📊 생산요소_물가</button>
+                    <button class="category-tab" onclick="switchDataCategory('gdp', this)">📈 1인당GDP</button>
+                    <button class="category-tab" onclick="switchDataCategory('population', this)">👥 건보대상</button>
+                    <button class="category-tab" onclick="switchDataCategory('cf', this)">💰 연도별환산지수</button>
+                    <button class="category-tab" onclick="switchDataCategory('law', this)">⚖️ 법과제도</button>
+                    <button class="category-tab" onclick="switchDataCategory('rv', this)">🔄 상대가치변화</button>
+                </div>
+
+                <!-- Data Input Forms -->
+                <!-- Data Input Forms -->
+                <div class="data-input-container">
+
+                    <!-- 1. Medical (Active) -->
+                    <div id="data-medical" class="data-category-content active">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                                <h3 style="border-left: 4px solid var(--accent-secondary); padding-left: 0.5rem;">진료비_실제
+                                    (십억원)</h3>
+                                <div class="year-badge">2022년 이후 수정 가능</div>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="medical-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>종별</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="medical-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetMedicalData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="saveMedicalData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2. Weights -->
+                    <div id="data-weights" class="data-category-content">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <h3
+                                style="margin-bottom: 1.5rem; border-left: 4px solid var(--accent-primary); padding-left: 0.5rem;">
+                                종별비용구조 (가중치)</h3>
+                            <div style="overflow-x: auto;">
+                                <table id="weights-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>종별</th>
+                                            <th>인건비</th>
+                                            <th>관리비</th>
+                                            <th>재료비</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="weights-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetWeightsData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="saveWeightsData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3. MEI -->
+                    <div id="data-mei" class="data-category-content">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                                <h3 style="border-left: 4px solid var(--accent-primary); padding-left: 0.5rem;">생산요소_물가
+                                    (2010-2028년)</h3>
+                                <div class="year-badge">2022년 이후 수정 가능</div>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="mei-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>항목</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="mei-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetMeiData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="saveMeiData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 4. GDP -->
+                    <div id="data-gdp" class="data-category-content">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                                <h3 style="border-left: 4px solid var(--accent-primary); padding-left: 0.5rem;">1인당GDP
+                                </h3>
+                                <div class="year-badge">2022년 이후 수정 가능</div>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="gdp-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>항목</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="gdp-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetGdpData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="saveGdpData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 5. Population -->
+                    <div id="data-population" class="data-category-content">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                                <h3 style="border-left: 4px solid var(--warning); padding-left: 0.5rem;">건보대상</h3>
+                                <div class="year-badge">2022년 이후 수정 가능</div>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="pop-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>항목</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="pop-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetPopData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="savePopData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 6. CF -->
+                    <div id="data-cf" class="data-category-content">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                                <h3 style="border-left: 4px solid var(--success); padding-left: 0.5rem;">연도별환산지수 (원/점)
+                                </h3>
+                                <div class="year-badge">2022년 이후 수정 가능</div>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="cf-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>종별</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="cf-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetCfData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="saveCfData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 7. Law -->
+                    <div id="data-law" class="data-category-content">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                                <h3 style="border-left: 4px solid var(--accent-secondary); padding-left: 0.5rem;">법과제도
+                                    (%)</h3>
+                                <div class="year-badge">2022년 이후 수정 가능</div>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="law-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>종별</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="law-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetLawData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="saveLawData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 8. RV -->
+                    <div id="data-rv" class="data-category-content">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                                <h3 style="border-left: 4px solid var(--success); padding-left: 0.5rem;">상대가치변화 (%)</h3>
+                                <div class="year-badge">2022년 이후 수정 가능</div>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="rv-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>종별</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="rv-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetRvData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="saveRvData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </section>
+
+            <!-- TAB: Detailed Stats -->
+            <section id="detailed-stats" class="tab-content">
+                <div class="header-section"
+                    style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div>
+                        <h1 style="font-weight: 800; font-size: 2rem;">세부 산출 내역</h1>
+                        <p style="color: var(--text-secondary);">각 연도별 분석 모델에 따른 세부 지표를 확인할 수 있습니다.</p>
+                    </div>
+                </div>
+
+                <div class="header-section" style="margin-top: 1.5rem; margin-bottom: 1rem;">
+                    <div style="display: flex; gap: 1rem;">
+                        <select id="detailTableSelector" style="width: auto;" onchange="renderDetailTable()">
+                            <option value="MEI_SCENARIO">1. MEI 물가지수 시나리오 (16종)</option>
+                            <option value="SGR_COMP">2. SGR 구성요소 (연도별 상세)</option>
+                            <option value="EXCEL_RAW">🟢 분석 기초자료 (원시자료 엑셀 형태)</option>
+                            <option value="BULK_RAW">3. 기초자료_증가율</option>
+                            <option value="SGR_INDEX">4. SGR 산출내역 (지수, 1.xxxx)</option>
+                            <option value="TARGET_EXP">5. 연도별 목표진료비 (Target V)</option>
+                            <option value="UAF_BOTH">6. UAF(PAF) 산출 추이</option>
+                            <option value="CF_SCENARIO_S1">7. 환산지수 조정률_현행 (16가지 시나리오)</option>
+                            <option value="CF_SCENARIO_S2">8. 환산지수 조정률_개선 (16가지 시나리오)</option>
+                            <option value="SGR_S1">9. 최종 조정률 결과 (현행모형)</option>
+                            <option value="SGR_S2">10. 최종 조정률 결과 (개선모형)</option>
+                            <option value="MACRO_MODELS">11. 거시지표 모형</option>
+                            <option value="FINAL_SCENARIO">12. 최종 결과 종합 (Summary)</option>
+                            <option value="AR_SCENARIO">13. AR모형 시나리오 분석 (30개)</option>
+                        </select>
+                        <select id="detailYearSelector" style="width: auto;" onchange="renderDetailTable()"></select>
+                    </div>
+                </div>
+                <div id="detailTableContainer" class="detailed-tables-wrapper">
+                    <!-- Tables will be injected here by JS -->
+                </div>
+            </section>
+
+
+
+            <!-- TAB: Analysis Report -->
+            <section id="analysis-report" class="tab-content">
+                <div class="header-section">
+                    <h1 style="font-weight: 800; font-size: 2rem;">경향성 분석 리포트</h1>
+                </div>
+
+                <div class="grid">
+                    <div class="card glass">
+                        <h3 style="color: var(--accent-primary);">💡 분석 인사이트</h3>
+                        <div id="aiInsight" style="margin-top: 1rem; line-height: 1.6; color: var(--text-secondary);">
+                            데이터를 분석중입니다...
+                        </div>
+                    </div>
+                    <div class="card glass">
+                        <h3>최종 환산지수 조정률 Summary</h3>
+                        <div id="summaryDashboard"
+                            style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem;">
+                            <!-- Dynamic Content -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Chart Expansion Modal -->
+    <div id="chartModalOverlay" class="chart-modal-overlay" onclick="closeChartModal(event)">
+        <div class="chart-modal-content" onclick="event.stopPropagation()">
+            <button class="chart-modal-close" onclick="closeChartModal(event)">✕</button>
+            <h2 id="chartModalTitle" class="chart-modal-title">Chart Title</h2>
+            <div class="expanded-chart-container">
+                <canvas id="expandedChartCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+    <script>
+        // Initial state from server
+        try {
+            const INITIAL_DATA = {{ analysis_data | tojson | safe
+        }};
+        window.appData = INITIAL_DATA;
+        } catch (e) {
+            console.error("Failed to parse INITIAL_DATA", e);
+            window.appData = { history: { years: [] }, components: { mei_raw: {}, sgr_factors: {} }, bulk_sgr: { factor_growth: {}, pop_growth: {}, gdp_growth: {}, reval_rates: {}, law_changes: {}, scenario_adjustments: {} }, groups: [] };
+        }
+
+        // Initialize App on load
+        document.addEventListener('DOMContentLoaded', () => {
+            if (typeof initApp === 'function') initApp();
+        });
+    </script>
+</body>
+
+</html>

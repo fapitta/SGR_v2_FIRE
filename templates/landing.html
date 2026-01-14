@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 기반 동적 환산지수 조정 모형 시스템</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+KR:wght@300;400;700;900&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/landing.css">
+</head>
+
+<body>
+    <div class="landing-container">
+        <!-- Animated Background -->
+        <div class="bg-animation"></div>
+
+        <!-- Main Content -->
+        <div class="content-wrapper">
+            <!-- Header Section with Clock & Weather -->
+            <header class="top-bar glass">
+                <div class="clock-widget">
+                    <div class="analog-clock">
+                        <div class="clock-face">
+                            <div class="hand hour-hand" id="hourHand"></div>
+                            <div class="hand minute-hand" id="minuteHand"></div>
+                            <div class="hand second-hand" id="secondHand"></div>
+                            <div class="center-dot"></div>
+                        </div>
+                    </div>
+                    <div class="digital-time">
+                        <div id="digitalClock" class="time-display">00:00:00</div>
+                        <div id="dateDisplay" class="date-display">2026/01/06</div>
+                    </div>
+                </div>
+                <div class="weather-widget">
+                    <div class="weather-icon">🌤️</div>
+                    <div class="weather-info">
+                        <div class="temp">18°C</div>
+                        <div class="condition">맑음</div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Hero Section -->
+            <section class="hero-section">
+                <div class="hero-badge glass">
+                    <span class="pulse-dot"></span>
+                    AI-Powered Dynamic System
+                </div>
+                <h1 class="hero-title">
+                    <span class="gradient-text">AI 기반 동적</span><br>
+                    환산지수 조정 모형
+                </h1>
+                <p class="hero-subtitle">
+                    SGR 모형과 거시지표 모형을 활용한 지능형 의료수가 환산지수 자동 산출 시스템
+                </p>
+
+                <!-- Feature Cards -->
+                <div class="feature-grid">
+                    <div class="feature-card glass">
+                        <div class="feature-icon">📊</div>
+                        <h3>통합 대시보드</h3>
+                        <p>SGR 및 거시지표 모형의 모든 분석 결과를 한눈에 비교</p>
+                    </div>
+                    <div class="feature-card glass">
+                        <div class="feature-icon">🔍</div>
+                        <h3>원시자료 검증</h3>
+                        <p>Excel 원본 시트별 데이터를 시스템 내에서 직접 확인</p>
+                    </div>
+                    <div class="feature-card glass">
+                        <div class="feature-icon">⚙️</div>
+                        <h3>실시간 시뮬레이션</h3>
+                        <p>기초자료 수정을 통한 즉각적인 환산지수 조정률 도출</p>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="model-selection glass" style="padding: 3rem; text-align: center;">
+                    <h2 class="section-title">환산지수 분석 시스템 접속</h2>
+                    <p class="section-subtitle">분석 시작하기 버튼 없이 모든 모형의 결과가 자동으로 집계됩니다.</p>
+
+                    <div style="display: flex; gap: 1.5rem; width: 100%; margin-top: 2rem; justify-content: center;">
+                        <button class="cta-button" onclick="location.href='/app?tab=dashboard'"
+                            style="flex: 1; min-width: 250px;">
+                            <span>📊 분석 대시보드 입장</span>
+                            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                <path d="M7.5 15L12.5 10L7.5 5" stroke="currentColor" stroke-width="2"
+                                    stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                        </button>
+                        <button class="cta-button glass" onclick="location.href='/app?tab=raw-data-view'"
+                            style="flex: 1; min-width: 250px; background: rgba(99, 102, 241, 0.1); border: 2px solid var(--accent-primary);">
+                            <span>📋 원시자료 관리 및 검증</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Developer Info -->
+                <footer class="developer-info glass">
+                    <div class="dev-label">Developed by</div>
+                    <div class="dev-name">Dongil O</div>
+                    <div class="dev-meta">Healthcare Economics Research Lab • 2027</div>
+                </footer>
+            </section>
+        </div>
+    </div>
+
+    <script src="/static/js/landing.js"></script>
+</body>
+
+</html>
