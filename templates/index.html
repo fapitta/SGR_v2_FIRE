@@ -48,6 +48,11 @@
             background: rgba(255, 255, 255, 0.2);
             border-radius: 10px;
         }
+
+        .detail-display-table th {
+            text-align: center !important;
+            vertical-align: middle !important;
+        }
     </style>
 </head>
 
@@ -64,6 +69,8 @@
                 <li class="nav-item" onclick="switchTab('data-entry')"><span>🛠️</span> 시뮬레이션 데이터 수정</li>
                 <li class="nav-item" onclick="switchTab('detailed-stats')"><span>📑</span> 세부 산출 내역</li>
                 <li class="nav-item" onclick="switchTab('analysis-report')"><span>📈</span> 경향성 분석 리포트</li>
+                <li class="nav-item" onclick="switchTab('budget-analysis-view')"><span>💰</span> 추가소요재정제약하의 환산지수조정율</li>
+                <li class="nav-item" onclick="switchTab('ai-prediction')"><span>🧠</span> AI 기반 예측 (2026)</li>
             </nav>
             <div style="margin-top: auto; display: flex; flex-direction: column; gap: 0.5rem;">
                 <button class="glass-btn" style="width: 100%; text-align: left;" onclick="location.href='/'">🏠 모형 선택으로
@@ -93,6 +100,8 @@
                                     onchange="updateModelSelection()">
                                     <option value="S1">현행 SGR 모형 (S1)</option>
                                     <option value="S2" selected>개선 SGR 모형 (S2)</option>
+                                    <option value="S1_Rescaled">현행 SGR (수가계약 반영)</option>
+                                    <option value="S2_Rescaled">개선 SGR (수가계약 반영)</option>
                                     <option value="GDP">GDP 성장률 모형</option>
                                     <option value="MEI">MEI 모형 (유형별)</option>
                                     <option value="Link">거시지표 연계 모형</option>
@@ -215,6 +224,8 @@
                     <button class="category-tab" onclick="switchDataCategory('cf', this)">💰 연도별환산지수</button>
                     <button class="category-tab" onclick="switchDataCategory('law', this)">⚖️ 법과제도</button>
                     <button class="category-tab" onclick="switchDataCategory('rv', this)">🔄 상대가치변화</button>
+                    <button class="category-tab" onclick="switchDataCategory('benefit-rate', this)">📑 급여율</button>
+                    <button class="category-tab" onclick="switchDataCategory('contract', this)">📑 수가계약</button>
                 </div>
 
                 <!-- Data Input Forms -->
@@ -427,6 +438,60 @@
                         </div>
                     </div>
 
+                    <!-- 9. Benefit Rate -->
+                    <div id="data-benefit-rate" class="data-category-content">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                                <h3 style="border-left: 4px solid var(--accent-secondary); padding-left: 0.5rem;">종별 급여율
+                                    (%)</h3>
+                                <div class="year-badge">2022년 이후 수정 가능</div>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="benefit-rate-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>종별</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="benefit-rate-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetBenefitRateData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="saveBenefitRateData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 10. Contract -->
+                    <div id="data-contract" class="data-category-content">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                                <h3 style="border-left: 4px solid var(--accent-primary); padding-left: 0.5rem;">수가계약
+                                    (인상율 & 추가소요재정)</h3>
+                                <div class="year-badge">2022년 이후 수정 가능</div>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="contract-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>연도</th>
+                                            <th>인상율_전체 (%)</th>
+                                            <th>추가소요재정_전체 (억 원)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="contract-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetContractData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="saveContractData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
             </section>
 
@@ -445,7 +510,6 @@
                         <select id="detailTableSelector" style="width: auto;" onchange="renderDetailTable()">
                             <option value="MEI_SCENARIO">1. MEI 물가지수 시나리오 (16종)</option>
                             <option value="SGR_COMP">2. SGR 구성요소 (연도별 상세)</option>
-                            <option value="EXCEL_RAW">🟢 분석 기초자료 (원시자료 엑셀 형태)</option>
                             <option value="BULK_RAW">3. 기초자료_증가율</option>
                             <option value="SGR_INDEX">4. SGR 산출내역 (지수, 1.xxxx)</option>
                             <option value="TARGET_EXP">5. 연도별 목표진료비 (Target V)</option>
@@ -457,6 +521,8 @@
                             <option value="MACRO_MODELS">11. 거시지표 모형</option>
                             <option value="FINAL_SCENARIO">12. 최종 결과 종합 (Summary)</option>
                             <option value="AR_SCENARIO">13. AR모형 시나리오 분석 (30개)</option>
+                            <option value="INDEX_METHOD">14. 인덱스(지수)법</option>
+                            <option value="BUDGET_ANALYSIS">15. 추가소요재정제약하의 환산지수조정율</option>
                         </select>
                         <select id="detailYearSelector" style="width: auto;" onchange="renderDetailTable()"></select>
                     </div>
@@ -490,6 +556,278 @@
                     </div>
                 </div>
             </section>
+
+            <!-- TAB: Additional Budget Analysis -->
+            <section id="budget-analysis-view" class="tab-content">
+                <div class="header-section"
+                    style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid rgba(255,255,255,0.05); padding-bottom: 1.5rem; margin-bottom: 2rem;">
+                    <div>
+                        <h1 style="font-weight: 800; font-size: 2.5rem; letter-spacing: -1px; margin: 0;">💰 추가소요재정제약하의
+                            환산지수조정율</h1>
+                        <p style="color: var(--text-secondary); margin-top: 0.3rem; font-size: 1.1rem;">연구 환산지수 조정률에 따른
+                            건강보험 추가 소요 재정 산출 결과</p>
+                    </div>
+                    <div id="budgetYearSelectorContainer"
+                        style="display: flex; gap: 0.4rem; background: rgba(0,0,0,0.2); padding: 0.5rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);">
+                        <!-- Year buttons will be injected here by JS -->
+                    </div>
+                </div>
+
+                <div class="card glass" style="padding: 1.5rem; margin-bottom: 2rem;">
+                    <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem;">
+                        <div
+                            style="background: rgba(99, 102, 241, 0.2); padding: 0.8rem; border-radius: 12px; color: #6366f1;">
+                            <i class="fas fa-info-circle fa-lg"></i>
+                        </div>
+                        <div>
+                            <h3 style="margin-bottom: 0.2rem;">분석 개요 및 산정 기준</h3>
+                            <p style="font-size: 0.9rem; color: var(--text-secondary);">2025년도 모형별 조정률을 적용했을 때의 재정적 영향을
+                                2023년 실적 데이터 기반으로 추정합니다.</p>
+                        </div>
+                    </div>
+
+                    <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 1rem;">
+                        <div class="glass" style="padding: 1rem; border-left: 4px solid #6366f1;">
+                            <div style="font-size: 0.75rem; color: var(--text-secondary);">기준 연도</div>
+                            <div style="font-weight: 800; font-size: 1.1rem;">2023년 실적 기반</div>
+                        </div>
+                        <div class="glass" style="padding: 1rem; border-left: 4px solid #10b981;">
+                            <div style="font-size: 0.75rem; color: var(--text-secondary);">AR 적용 조건</div>
+                            <div style="font-weight: 800; font-size: 1.1rem;">r = 0.15 (15%)</div>
+                        </div>
+                        <div class="glass" style="padding: 1rem; border-left: 4px solid #f59e0b;">
+                            <div style="font-size: 0.75rem; color: var(--text-secondary);">MEI 시나리오</div>
+                            <div style="font-weight: 800; font-size: 1.1rem;">평균 Scenario</div>
+                        </div>
+                    </div>
+
+                    <div
+                        style="margin-top: 1.5rem; padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 8px; font-size: 0.85rem;">
+                        <i class="fas fa-square-root-alt"></i> <b>산출 공식:</b>
+                        <span style="color: #6366f1; margin-left: 0.5rem;">2025년 추가소요재정 = (2025년 인상률) × (2023년 급여율) ×
+                            (2023년 실제진료비)</span>
+                    </div>
+                </div>
+
+                <div id="budgetAnalysisContainer">
+                    <!-- Dynamic Table Content -->
+                </div>
+            </section>
+
+            <!-- TAB: AI Prediction (Premium UI) -->
+            <section id="ai-prediction" class="tab-content">
+                <div class="header-section"
+                    style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 2.5rem;">
+                    <div>
+                        <h1
+                            style="font-weight: 800; font-size: 3rem; background: linear-gradient(135deg, #6366f1, #a855f7, #ec4899); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: -1.5px;">
+                            AI Intelligence Prediction</h1>
+                        <p style="color: var(--text-secondary); font-size: 1.1rem; margin-top: 0.5rem;">하이브리드 시뮬레이션 및 제약
+                            조건 최적화 기반 수가 조정률 예측</p>
+                    </div>
+                    <div id="aiYearSelectorContainer"
+                        style="display: flex; gap: 0.5rem; background: rgba(255, 255, 255, 0.05); padding: 0.6rem; border-radius: 16px; border: 1px solid var(--border-glass); backdrop-filter: blur(10px);">
+                        <!-- Year buttons (2024-2028) -->
+                        <button class="category-tab" onclick="runAIPrediction(2024, this)">2024</button>
+                        <button class="category-tab" onclick="runAIPrediction(2025, this)">2025</button>
+                        <button class="category-tab active" onclick="runAIPrediction(2026, this)">2026</button>
+                        <button class="category-tab" onclick="runAIPrediction(2027, this)">2027</button>
+                        <button class="category-tab" onclick="runAIPrediction(2028, this)">2028</button>
+                    </div>
+                </div>
+
+                <div class="grid" style="grid-template-columns: 2fr 1fr; gap: 2rem;">
+                    <!-- Left Column: Results -->
+                    <div style="display: flex; flex-direction: column; gap: 2rem;">
+                        <!-- 1. Visualization & Top Results -->
+                        <div class="card glass" style="padding: 2rem; position: relative; overflow: hidden;">
+                            <div
+                                style="position: absolute; top: -50px; right: -50px; width: 150px; height: 150px; background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, transparent 70%); border-radius: 50%;">
+                            </div>
+                            <h3 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.7rem;">
+                                <span
+                                    style="background: var(--accent-primary); width: 12px; height: 12px; border-radius: 3px;"></span>
+                                <span id="aiResultTitle">2026년 AI 최적화 예측 결과</span>
+                            </h3>
+                            <div style="overflow-x: auto;">
+                                <table class="detail-display-table"
+                                    style="width: 100%; border-collapse: separate; border-spacing: 0 8px;">
+                                    <thead>
+                                        <tr style="background: rgba(255,255,255,0.03);">
+                                            <th style="border-radius: 8px 0 0 8px; padding: 1rem;">유형 (Entity)</th>
+                                            <th style="padding: 1rem;">현행SGR모형 결과_mei평균</th>
+                                            <th style="padding: 1rem; color: var(--accent-primary);">AI 최적화 결과</th>
+                                            <th style="border-radius: 0 8px 8px 0; padding: 1rem;">상태</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="aiResultBody">
+                                        <!-- Dynamic rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div id="aiTotalBudgetMsg"
+                                style="margin-top: 1.5rem; padding: 1.2rem; background: rgba(16, 185, 129, 0.1); border-radius: 12px; color: #34d399; font-weight: 700; text-align: center; border: 1px dashed rgba(52, 211, 153, 0.3);">
+                                🎯 예측 추가소요재정 합계: <span id="aiTargetBudget">-</span> 억 원
+                            </div>
+                        </div>
+
+                        <!-- 2. Simulation Deep Dive -->
+                        <div class="card glass" style="padding: 2rem;">
+                            <h3 style="margin-bottom: 1.5rem; color: #a855f7;">📈 시뮬레이션 파라미터 분석 (Parameter Tuning)</h3>
+                            <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 1.5rem;">
+                                <div class="glass"
+                                    style="padding: 1.5rem; text-align: center; border-bottom: 3px solid #6366f1;">
+                                    <div
+                                        style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                                        관찰 기간 (k)</div>
+                                    <div id="aiSimK" style="font-size: 2.5rem; font-weight: 800;">-</div>
+                                    <div style="font-size: 0.75rem; color: #818cf8;">역대 평균 g 기반</div>
+                                </div>
+                                <div class="glass"
+                                    style="padding: 1.5rem; text-align: center; border-bottom: 3px solid #a855f7;">
+                                    <div
+                                        style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                                        미래 반영 (j)</div>
+                                    <div id="aiSimJ" style="font-size: 2.5rem; font-weight: 800;">-</div>
+                                    <div style="font-size: 0.75rem; color: #c084fc;">복리 증가지수 적용</div>
+                                </div>
+                                <div class="glass"
+                                    style="padding: 1.5rem; text-align: center; border-bottom: 3px solid #f43f5e;">
+                                    <div
+                                        style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                                        검증 오차율</div>
+                                    <div id="aiSimError" style="font-size: 1.8rem; font-weight: 800; color: #f43f5e;">-
+                                    </div>
+                                    <div style="font-size: 0.75rem; color: #fb7185;">과거 5개년 평균</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 3. NEW: Accuracy History Table -->
+                        <div class="card glass" style="padding: 2rem;">
+                            <h3 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.7rem;">
+                                <span
+                                    style="background: #10b981; width: 12px; height: 12px; border-radius: 3px;"></span>
+                                AI 예측 vs 실제 재정 비교표 (2021-2025)
+                            </h3>
+                            <div style="overflow-x: auto; width: 100%; cursor: grab;">
+                                <table class="detail-display-table"
+                                    style="min-width: 800px; width: 100%; border-collapse: separate; border-spacing: 0 4px; font-size: 0.8rem;">
+                                    <thead>
+                                        <tr style="background: rgba(255,255,255,0.03);">
+                                            <th style="padding: 0.8rem;">연도</th>
+                                            <th style="padding: 0.8rem;">실제 재정(억)</th>
+                                            <th style="padding: 0.8rem;">AI 예측치(억)</th>
+                                            <th style="padding: 0.8rem;">오차율</th>
+                                            <th style="padding: 0.8rem; color: #94a3b8;">진료량(Vol)</th>
+                                            <th style="padding: 0.8rem; color: #94a3b8;">지수(RVU)</th>
+                                            <th style="padding: 0.8rem; color: #94a3b8;">환산지수(CF)</th>
+                                            <th style="padding: 0.8rem; color: #94a3b8;">인상률 d(CF_t)</th>
+                                            <th style="padding: 0.8rem; color: #94a3b8;">급여율</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="aiHistoryBody">
+                                        <!-- Dynamic rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- 4. AI Insight Summary -->
+                        <div class="card glass"
+                            style="padding: 2rem; background: rgba(99, 102, 241, 0.05); border: 1px solid rgba(99, 102, 241, 0.2);">
+                            <h3 style="margin-bottom: 1rem; color: #6366f1; font-size: 1.2rem;">💡 AI 분석 인사이트 및 SLSQP
+                                알고리즘 설명
+                            </h3>
+                            <div id="aiAnalysisInsight"
+                                style="line-height: 1.7; color: var(--text-secondary); font-size: 0.95rem;">
+                                분석 대기 중...
+                            </div>
+                            <hr style="border: none; border-top: 1px solid rgba(255,255,255,0.1); margin: 1.5rem 0;">
+                            <div style="font-size: 0.85rem; color: #94a3b8;">
+                                <h4 style="color: #cbd5e1; margin-bottom: 0.5rem;">🛠️ 최적화 엔진: SLSQP (Sequential Least
+                                    Squares Programming)</h4>
+                                <p style="margin-bottom: 0.5rem;">본 시스템은 복잡한 비선형 제약 조건 하에서 최적의 해를 찾기 위해 <b>SLSQP</b>
+                                    알고리즘을 사용합니다.</p>
+                                <ul style="padding-left: 1.2rem;">
+                                    <li><b>정의:</b> 비선형 프로그래밍 문제를 해결하기 위한 반복적 방법으로, 각 단계에서 2차 계획법(QP) 하위 문제를 해결하여 최적점에
+                                        접근합니다.</li>
+                                    <li><b>적용:</b> 총 예산 제약(Equality Constraint)과 유형별 순위 보전 및 인상률 범위 제약(Inequality
+                                        Constraints)을 동시에 엄격하게 준수하면서, 기존 SGR 산출값과의 편차를 최소화합니다.</li>
+                                    <li><b>장점:</b> 수렴 속도가 빠르고 다양한 형태의 제약을 수치적으로 안정적으로 처리할 수 있어, 공학 및 금융 공학 분야에서 널리 사용되는
+                                        신뢰도 높은 최적화 기법입니다.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Documentation -->
+                    <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+                        <!-- Methodology Card -->
+                        <div class="card glass"
+                            style="padding: 1.5rem; background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 100%);">
+                            <h4
+                                style="color: var(--accent-primary); margin-bottom: 1rem; border-bottom: 1px solid var(--border-glass); padding-bottom: 0.5rem;">
+                                📖 추정 방법론 (Methodology)</h4>
+                            <div style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.7;">
+                                <div style="margin-bottom: 1rem;">
+                                    <span style="color: #fff; font-weight: 700;">1단계: 시뮬레이션</span><br>
+                                    과거 5개년(2021-25) 데이터를 전수 조사하여 실제 예산 규모를 가장 정확히 맞추는 (k, j) 파라미터를 결정합니다.
+                                </div>
+                                <div style="margin-bottom: 1rem;">
+                                    <span style="color: #fff; font-weight: 700;">2단계: 제약 최적화</span><br>
+                                    산출된 목표 예산을 만족하면서도, SGR 순위 보전 및 정책적 인상률 범위를 준수하는 <b>SLSQP 최적화</b>를 수행합니다.
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Formula Card -->
+                        <div class="card glass" style="padding: 1.5rem; border: 1px solid rgba(99, 102, 241, 0.3);">
+                            <h4 style="color: #818cf8; margin-bottom: 1rem;">🧮 핵심 공식 (Core Formula)</h4>
+                            <div
+                                style="background: rgba(0,0,0,0.3); padding: 1.5rem; border-radius: 12px; font-family: 'Outfit'; font-size: 1rem; text-align: center; color: #6366f1; border: 1px solid rgba(99, 102, 241, 0.1);">
+                                <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.8rem;">[추가소요재정 예측식]
+                                </div>
+                                <div style="line-height: 1.8;">
+                                    Budget<sub>t</sub> = <span style="color:#fff;">(Exp<sub>t-2</sub> /
+                                        CF<sub>t-2</sub>)</span> <br>
+                                    × <span style="color:#a855f7;">RVU_Idx(k,j)</span> <br>
+                                    × <span style="color:#fff;">CF<sub>t-1</sub></span> × <span
+                                        style="color:#f43f5e;">d(CF<sub>t</sub>)</span> <br>
+                                    × <span style="color:#10b981;">Benefit<sub>t</sub></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Limitations & Future -->
+                        <div class="card glass"
+                            style="padding: 1.5rem; font-size: 0.85rem; border-color: rgba(245, 158, 11, 0.2);">
+                            <h4 style="color: #fbbf24; margin-bottom: 0.8rem;">⚠️ 한계점 및 개선 방향</h4>
+                            <ul
+                                style="padding-left: 1.2rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.5rem;">
+                                <li>진료량(RVU) 역산 시 CF 가중평균 가정 적용</li>
+                                <li>급여율(Benefit)의 시계열 안정성 강화 필요</li>
+                                <li>향후 딥러닝(Transformer) 기반 시계열 예측 도입 검토</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Thinking Process (Collensible) -->
+                <div style="margin-top: 2rem;">
+                    <details class="card glass" style="background: rgba(15, 23, 42, 0.5); border: none;">
+                        <summary
+                            style="cursor: pointer; font-weight: 700; color: #94a3b8; padding: 1rem; user-select: none; font-size: 1.2rem;">
+                            💡 AI Decision Logs (클릭하여 추론 과정 확인)
+                        </summary>
+                        <div id="aiLogs"
+                            style="padding: 1rem; font-family: 'Courier New', monospace; font-size: 1.1rem; color: #38bdf8; max-height: 500px; overflow-y: auto; white-space: pre-wrap; border-top: 1px solid rgba(255,255,255,0.05);">
+                            분석 대기 중...
+                        </div>
+                    </details>
+                </div>
+            </section>
+
         </main>
     </div>
 

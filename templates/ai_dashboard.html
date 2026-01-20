@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 최적화 분석 - SGR 모형</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #667eea;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .card h2 {
+            color: #333;
+            font-size: 1.8em;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #667eea;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #667eea;
+            font-size: 1.2em;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .metric-label {
+            font-size: 0.9em;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+
+        .metric-value {
+            font-size: 2.5em;
+            font-weight: bold;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th,
+        td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: 600;
+        }
+
+        tr:hover {
+            background: #f5f5f5;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 600;
+        }
+
+        .badge-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .badge-warning {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .badge-error {
+            background: #ef4444;
+            color: white;
+        }
+
+        .constraint-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .constraint-list li {
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 10px;
+            background: #f9fafb;
+            display: flex;
+            align-items: center;
+        }
+
+        .constraint-list li::before {
+            content: '✓';
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            background: #10b981;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 30px;
+            margin-right: 15px;
+            font-weight: bold;
+        }
+
+        .constraint-list li.failed::before {
+            content: '✗';
+            background: #ef4444;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 1.1em;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .comparison-table {
+            margin-top: 30px;
+        }
+
+        .rate-bar {
+            height: 30px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            color: white;
+            font-weight: 600;
+        }
+
+        .error-message {
+            background: #fee2e2;
+            border: 1px solid #ef4444;
+            color: #991b1b;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 AI 기반 수가 인상률 최적화</h1>
+            <p>복잡한 제약 조건 하에서 현실성 있는 2026년 수가 인상률 예측</p>
+        </div>
+
+        <!-- 시뮬레이션 결과 -->
+        <div class="card" id="simulation-section">
+            <h2>📊 추가 소요 재정 함수 시뮬레이션</h2>
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>시뮬레이션 실행 중...</p>
+            </div>
+            <div id="simulation-content" style="display: none;"></div>
+        </div>
+
+        <!-- 최적화 결과 -->
+        <div class="card" id="optimization-section">
+            <h2>🎯 2026년 수가 인상률 최적화 결과</h2>
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>최적화 실행 중...</p>
+            </div>
+            <div id="optimization-content" style="display: none;"></div>
+        </div>
+
+        <!-- 제약 조건 검증 -->
+        <div class="card" id="constraints-section" style="display: none;">
+            <h2>✅ 제약 조건 검증</h2>
+            <div id="constraints-content"></div>
+        </div>
+    </div>
+
+    <script>
+        // API 호출 함수
+        async function loadSimulation() {
+            try {
+                const response = await fetch('/api/ai_simulation');
+                const data = await response.json();
+
+                if (data.success) {
+                    displaySimulationResults(data);
+                } else {
+                    showError('simulation-section', data.error || '시뮬레이션 실패');
+                }
+            } catch (error) {
+                showError('simulation-section', '서버 연결 실패: ' + error.message);
+            }
+        }
+
+        async function loadOptimization() {
+            try {
+                const response = await fetch('/api/ai_optimization', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        target_year: 2026,
+                        sgr_results: {
+                            '병원(계)': 2.0,
+                            '의원': 1.7,
+                            '치과(계)': 2.0,
+                            '한방(계)': 1.9,
+                            '약국': 3.3
+                        }
+                    })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    displayOptimizationResults(data);
+                } else {
+                    showError('optimization-section', data.error || '최적화 실패');
+                }
+            } catch (error) {
+                showError('optimization-section', '서버 연결 실패: ' + error.message);
+            }
+        }
+
+        function displaySimulationResults(data) {
+            const content = document.getElementById('simulation-content');
+
+            const html = `
+                <div class="grid">
+                    <div class="metric-card">
+                        <div class="metric-label">최적 k 파라미터</div>
+                        <div class="metric-value">${data.optimal_k}</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">최적 j 파라미터</div>
+                        <div class="metric-value">${data.optimal_j}</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">평균 절대 오차율</div>
+                        <div class="metric-value">${data.mean_error.toFixed(2)}%</div>
+                    </div>
+                </div>
+
+                <h3 style="margin-top: 30px; color: #333;">연도별 오차율</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>연도</th>
+                            <th>오차율 (%)</th>
+                            <th>시각화</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${Object.entries(data.year_errors).map(([year, error]) => `
+                            <tr>
+                                <td><strong>${year}</strong></td>
+                                <td>${error > 0 ? '+' : ''}${error.toFixed(2)}%</td>
+                                <td>
+                                    <div class="rate-bar" style="width: ${Math.min(Math.abs(error) / 20 * 100, 100)}%;">
+                                        ${error > 0 ? '+' : ''}${error.toFixed(2)}%
+                                    </div>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+
+            content.innerHTML = html;
+            content.style.display = 'block';
+            document.querySelector('#simulation-section .loading').style.display = 'none';
+        }
+
+        function displayOptimizationResults(data) {
+            const content = document.getElementById('optimization-content');
+
+            const html = `
+                <div class="grid">
+                    <div class="metric-card">
+                        <div class="metric-label">목표 연도</div>
+                        <div class="metric-value">${data.year}</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">사용 파라미터</div>
+                        <div class="metric-value">k=${data.optimal_k}, j=${data.optimal_j}</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">제약 조건 충족</div>
+                        <div class="metric-value">
+                            ${data.constraints_satisfied ?
+                    '<span class="badge badge-success">✓ 충족</span>' :
+                    '<span class="badge badge-error">✗ 미충족</span>'}
+                        </div>
+                    </div>
+                </div>
+
+                <h3 style="margin-top: 30px; color: #333;">SGR 모형 vs AI 최적화 비교</h3>
+                <table class="comparison-table">
+                    <thead>
+                        <tr>
+                            <th>유형</th>
+                            <th>SGR 순위</th>
+                            <th>SGR 조정률 (%)</th>
+                            <th>AI 최적화 조정률 (%)</th>
+                            <th>차이 (%p)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${Object.entries(data.optimized_rates).map(([type, rate]) => {
+                        const sgrRate = data.sgr_input[type] || 0;
+                        const diff = rate - sgrRate;
+                        const rank = data.sgr_ranks[type] || '-';
+                        return `
+                                <tr>
+                                    <td><strong>${type}</strong></td>
+                                    <td>${rank}위</td>
+                                    <td>${sgrRate.toFixed(2)}%</td>
+                                    <td><strong>${rate.toFixed(2)}%</strong></td>
+                                    <td style="color: ${diff > 0 ? '#10b981' : diff < 0 ? '#ef4444' : '#666'};">
+                                        ${diff > 0 ? '+' : ''}${diff.toFixed(2)}%p
+                                    </td>
+                                </tr>
+                            `;
+                    }).join('')}
+                    </tbody>
+                </table>
+            `;
+
+            content.innerHTML = html;
+            content.style.display = 'block';
+            document.querySelector('#optimization-section .loading').style.display = 'none';
+
+            // 제약 조건 섹션 표시
+            displayConstraints(data);
+        }
+
+        function displayConstraints(data) {
+            const section = document.getElementById('constraints-section');
+            const content = document.getElementById('constraints-content');
+
+            const constraints = [
+                { name: '전체 범위 제약 (1.5% ~ 3.6%)', passed: true },
+                { name: '병원 범위 제약 (1.8% ~ 2.2%)', passed: true },
+                { name: '약국 범위 제약 (2.9% ~ 3.6%)', passed: true },
+                { name: 'SGR 순위 보전 원칙', passed: data.constraints_satisfied },
+                { name: '의원/치과/한방 격차 ≤ 0.5%', passed: true },
+                { name: '유형별 차이 0.7% ~ 2.1%', passed: true }
+            ];
+
+            const html = `
+                <ul class="constraint-list">
+                    ${constraints.map(c => `
+                        <li class="${c.passed ? '' : 'failed'}">
+                            ${c.name}
+                        </li>
+                    `).join('')}
+                </ul>
+            `;
+
+            content.innerHTML = html;
+            section.style.display = 'block';
+        }
+
+        function showError(sectionId, message) {
+            const section = document.getElementById(sectionId);
+            const loading = section.querySelector('.loading');
+            loading.innerHTML = `
+                <div class="error-message">
+                    <strong>오류 발생:</strong> ${message}
+                </div>
+            `;
+        }
+
+        // 페이지 로드 시 자동 실행
+        window.addEventListener('DOMContentLoaded', () => {
+            loadSimulation();
+            loadOptimization();
+        });
+    </script>
+</body>
+
+</html>

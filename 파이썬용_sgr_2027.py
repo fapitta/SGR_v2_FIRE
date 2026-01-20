@@ -1,14 +1,34 @@
 import pandas as pd
 import numpy as np
 import warnings
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, render_template, request, send_file, jsonify, redirect, url_for
 import io
 import os
 import datetime
 from openpyxl import load_workbook
+from scipy.optimize import minimize
+
+# AI 최적화 모듈 import
+try:
+    from ai_optimizer import AIOptimizationEngine
+    AI_MODULE_AVAILABLE = True
+except ImportError:
+    print("[WARNING] AI optimizer module not available")
+    AI_MODULE_AVAILABLE = False
 
 # 경고 무시 설정
 warnings.filterwarnings('ignore')
+
+def sanitize_data(data):
+    """JSON 직렬화 가능하도록 데이터 정제 (NaN/Inf -> None)"""
+    if isinstance(data, dict):
+        return {k: sanitize_data(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_data(v) for v in data]
+    elif isinstance(data, float):
+        if np.isnan(data) or np.isinf(data):
+            return None
+    return data
 
 # ----------------------------------------------------------------------
 # 1. 데이터 로드 및 전처리 클래스 (Advanced DataProcessor)
@@ -67,23 +87,26 @@ class DataProcessor:
 
     def _load_data(self):
         try:
-            # Check if file exists first to avoid confusing errors
             if not os.path.exists(self.file_path):
                  raise FileNotFoundError(f"File not found: {self.file_path}")
 
-            # Load into temp dictionary
-            new_data = {
-                'df_expenditure': self._load_sheet('expenditure_real', filter_years=True),
-                'df_weights': self._load_sheet('cost_structure').T,
-                'df_raw_mei_inf': self._load_sheet('factor_pd', filter_years=True),
-                'df_gdp': self._load_sheet('GDP', filter_years=True),
-                'df_pop': self._load_sheet('pop', filter_years=True),
-                'df_sgr_reval': self._load_sheet('cf_t', filter_years=True),
-                'df_sgr_law': self._load_sheet('law', filter_years=True),
-                'df_rel_value': self._load_sheet('rvs', filter_years=True)
-            }
+            # [OPTIMIZATION] Use pd.ExcelFile to read workbook once
+            with pd.ExcelFile(self.file_path) as xls:
+                new_data = {
+                    'df_expenditure': self._load_sheet_from_xls(xls, 'expenditure_real', filter_years=True),
+                    'df_weights': self._load_sheet_from_xls(xls, 'cost_structure').T,
+                    'df_raw_mei_inf': self._load_sheet_from_xls(xls, 'factor_pd', filter_years=True),
+                    'df_gdp': self._load_sheet_from_xls(xls, 'GDP', filter_years=True),
+                    'df_pop': self._load_sheet_from_xls(xls, 'pop', filter_years=True),
+                    'df_sgr_reval': self._load_sheet_from_xls(xls, 'cf_t', filter_years=True),
+                    'df_sgr_law': self._load_sheet_from_xls(xls, 'law', filter_years=True),
+                    'df_rel_value': self._load_sheet_from_xls(xls, 'rvs', filter_years=True),
+                    'df_num': self._load_sheet_from_xls(xls, 'num', filter_years=True),
+                    'df_contract': self._load_sheet_from_xls(xls, 'contract', filter_years=True),
+                    'df_finance': self._load_sheet_from_xls(xls, 'finance', filter_years=True),
+                    'df_rate_py': self._load_sheet_from_xls(xls, 'rate_py', filter_years=True) if 'rate_py' in xls.sheet_names else self._load_sheet_from_xls(xls, 'Sheet1', filter_years=True)
+                }
             
-            # Integrity Check: Validation of Critical Data
             if new_data['df_expenditure'].empty:
                 raise ValueError("Critical Validation Error: 'expenditure_real' sheet is empty or failed to load.")
             
@@ -91,6 +114,37 @@ class DataProcessor:
         except Exception as e:
             print(f"❌ 데이터 로드 치명적 오류: {e}")
             raise e
+
+    def _load_sheet_from_xls(self, xls, sheet_name, index_col=0, filter_years=False):
+        try:
+            if sheet_name not in xls.sheet_names:
+                return pd.DataFrame()
+                
+            df = pd.read_excel(xls, sheet_name=sheet_name, index_col=None)
+            
+            if filter_years:
+                target_col = None
+                if '연도' in df.columns: target_col = '연도'
+                elif 'Year' in df.columns: target_col = 'Year'
+                else: target_col = df.columns[0]
+                
+                df = df.set_index(target_col)
+                df.index = pd.to_numeric(df.index, errors='coerce')
+                df = df[df.index.notna()]
+                df.index = df.index.astype(int)
+                df = df[df.index > 1990]
+            else:
+                if not df.empty and len(df.columns) > 0:
+                     df = df.set_index(df.columns[0])
+
+            df.columns = [str(c).strip() for c in df.columns]
+            if df.index.dtype == 'object':
+                df.index = [str(i).strip() if isinstance(i, str) else i for i in df.index]
+
+            return df.apply(pd.to_numeric, errors='coerce')
+        except Exception as e:
+            print(f"Sheet {sheet_name} load warning: {e}")
+            return pd.DataFrame()
 
     def reload_data(self):
         """Force reload data from Excel file (SAFE RELOAD)"""
@@ -328,9 +382,12 @@ class MeiCalculator:
     def __init__(self, data, hospital_types):
         self.data = data
         self.hospital_types = hospital_types
+        self._cache = {} # [OPTIMIZATION] Memoization
 
     def calc_mei_index_by_year(self, target_year):
-        # target_year 환산지수를 위해 T-2년(target_year-2) MEI를 산출
+        if target_year in self._cache:
+            return self._cache[target_year]
+            
         calc_year = target_year - 2
         df_inf = self.data['df_raw_mei_inf']
         df_weights = self.data['df_weights']
@@ -382,6 +439,7 @@ class MeiCalculator:
                 '평균': df.mean(axis=1), '최대': df.max(axis=1), 
                 '최소': df.min(axis=1), '중위수': df.median(axis=1)
             })], axis=1)
+            self._cache[target_year] = df_final # Store in cache
             return df_final
         except Exception as e:
             print(f"MEI 산출 중 오류 ({target_year}): {e}")
@@ -392,6 +450,9 @@ class SgrCalculator:
         self.data = data
         self.hospital_types = hospital_types
         self.group_mapping = group_mapping or {}
+        self._comp_cache = {} # [OPTIMIZATION] Memoization
+        self._s1_cache = {}
+        self._s2_cache = {}
 
     def _safe_get(self, df, year, col=None):
         try:
@@ -402,6 +463,9 @@ class SgrCalculator:
             return 1.0
 
     def _calc_sgr_components(self, year):
+        if year in self._comp_cache:
+            return self._comp_cache[year]
+            
         try:
             gdp, pop, law, reval = self.data['df_gdp'], self.data['df_pop'], self.data['df_sgr_law'], self.data['df_sgr_reval']
             exp = self.data['df_expenditure']
@@ -430,7 +494,9 @@ class SgrCalculator:
                         l[g] = (l[valid] * weights).sum()
                         r[g] = (r[valid] * weights).sum()
             
-            return {'g_s1': g_s1, 'p_s1': p_s1, 'g_s2': g_s2, 'p_s2': p_s2, 'l': l, 'r': r}
+            res = {'g_s1': g_s1, 'p_s1': p_s1, 'g_s2': g_s2, 'p_s2': p_s2, 'l': l, 'r': r}
+            self._comp_cache[year] = res # Store in cache
+            return res
         except: return None
 
     def calc_sgr_index(self, components, model='S1'):
@@ -440,6 +506,9 @@ class SgrCalculator:
         return g * p * components['l'] * components['r']
 
     def calc_paf_s1(self, target_year):
+        if target_year in self._s1_cache:
+             return self._s1_cache[target_year]
+             
         ae_actual = self.data['df_expenditure']
         types_all = self.hospital_types + list(self.group_mapping.keys())
         
@@ -450,9 +519,8 @@ class SgrCalculator:
         
         ae_22 = self._safe_get(ae_actual, y_recent-1)
         ae_23 = self._safe_get(ae_actual, y_recent)
-        tge_recent = ae_22 * idx_recent
         
-        # 2. Accumulation Loop
+        # 2. Accumulation Loop (Vectorized)
         y_start, y_end = target_year-11, target_year-2
         sums_tge = pd.Series(0.0, index=types_all)
         sums_ae = pd.Series(0.0, index=types_all)
@@ -463,50 +531,46 @@ class SgrCalculator:
             a_prev = self._safe_get(ae_actual, y-1)
             a_curr = self._safe_get(ae_actual, y)
             
-            # For individuals
-            for t in self.hospital_types:
-                sums_tge[t] += a_prev[t] * idx[t]
-                sums_ae[t] += a_curr[t]
+            # Apply to individuals
+            sums_tge[self.hospital_types] += a_prev[self.hospital_types] * idx[self.hospital_types]
+            sums_ae[self.hospital_types] += a_curr[self.hospital_types]
             
-            # Aggregates for groups
+            # Apply to groups (Aggregate sums)
             for g, members in self.group_mapping.items():
-                sums_tge[g] += sum([a_prev[m] * idx[m] for m in members if m in a_prev.index])
-                sums_ae[g] += sum([a_curr[m] for m in members if m in a_curr.index])
+                sums_tge[g] += (a_prev[members] * idx[members]).sum()
+                sums_ae[g] += a_curr[members].sum()
 
         # 3. Denominators
         c_24 = self._calc_sgr_components(target_year-1)
         idx_24 = self.calc_sgr_index(c_24, model='S1')
         denoms = pd.Series(0.0, index=types_all)
         
-        for t in self.hospital_types:
-            denoms[t] = ae_23[t] * (1 + idx_24[t])
-            
+        denoms[self.hospital_types] = ae_23[self.hospital_types] * (1 + idx_24[self.hospital_types])
         for g, members in self.group_mapping.items():
-             denoms[g] = sum([ae_23[m] * (1 + idx_24[m]) for m in members if m in ae_23.index])
+             denoms[g] = (ae_23[members] * (1 + idx_24[members])).sum()
 
         # 4. Final UAF
-        # Short Term Gap
-        # For groups, GapShort must also use Aggregate
         gap_short = pd.Series(0.0, index=types_all)
-        for t in self.hospital_types:
-            gap_short[t] = (tge_recent[t] - ae_23[t]) / ae_23[t]
+        tge_recent = ae_22 * idx_recent
+        gap_short[self.hospital_types] = (tge_recent[self.hospital_types] - ae_23[self.hospital_types]) / ae_23[self.hospital_types]
         
         for g, members in self.group_mapping.items():
-            agg_tge = sum([ae_22[m] * idx_recent[m] for m in members if m in ae_22.index])
-            agg_ae = sum([ae_23[m] for m in members if m in ae_23.index])
+            agg_tge = (ae_22[members] * idx_recent[members]).sum()
+            agg_ae = ae_23[members].sum()
             gap_short[g] = (agg_tge - agg_ae) / agg_ae
 
         gap_accum = (sums_tge - sums_ae) / denoms
         uaf = gap_short * 0.75 + gap_accum * 0.33
+        self._s1_cache[target_year] = uaf
         return uaf
 
     def calc_paf_s2(self, target_year):
+        if target_year in self._s2_cache:
+             return self._s2_cache[target_year]
+             
         # S2 usually follows similar aggregate logic for groups
         ae_actual = self.data['df_expenditure']
         types_all = self.hospital_types + list(self.group_mapping.keys())
-        
-        # We'll calculate weighted average of gaps for S2 or Aggregate Ratio?
-        # Given S1 correction, Aggregate Ratio is safer.
         group_pafs = pd.Series(0.0, index=types_all)
         
         for lag, weight in [(2, 0.5), (3, 0.3), (4, 0.2)]:
@@ -518,17 +582,17 @@ class SgrCalculator:
             ae_curr = self._safe_get(ae_actual, y)
             
             term_gaps = pd.Series(0.0, index=types_all)
-            for t in self.hospital_types:
-                tge = ae_prev[t] * idx[t]
-                term_gaps[t] = (tge - ae_curr[t]) / ae_curr[t]
+            tge = ae_prev[self.hospital_types] * idx[self.hospital_types]
+            term_gaps[self.hospital_types] = (tge - ae_curr[self.hospital_types]) / ae_curr[self.hospital_types]
                 
             for g, members in self.group_mapping.items():
-                agg_t = sum([ae_prev[m] * idx[m] for m in members if m in ae_prev.index])
-                agg_a = sum([ae_curr[m] for m in members if m in ae_curr.index])
+                agg_t = (ae_prev[members] * idx[members]).sum()
+                agg_a = ae_curr[members].sum()
                 term_gaps[g] = (agg_t - agg_a) / agg_a
                 
             group_pafs += term_gaps * weight
             
+        self._s2_cache[target_year] = group_pafs
         return group_pafs
 
 class CalculationEngine:
@@ -540,8 +604,16 @@ class CalculationEngine:
         }
         self.data = self._apply_overrides(baseline_data, overrides)
         self.mei_calc = MeiCalculator(self.data, self.HOSPITAL_TYPES)
-        # Pass group mapping to sgr_calc
         self.sgr_calc = SgrCalculator(self.data, self.HOSPITAL_TYPES, self.GROUP_MAPPING)
+        
+        # [Optimized] Pre-calculate expenditure weights for speed
+        self._precalc_weights = {}
+        for y in range(2010, 2030):
+            try:
+                exp = self.data['df_expenditure'].loc[y].reindex(self.HOSPITAL_TYPES).fillna(0)
+                tot = exp.sum()
+                if tot > 0: self._precalc_weights[y] = exp / tot
+            except: pass
 
     def _apply_overrides(self, baseline, overrides):
         if not overrides: return baseline
@@ -621,19 +693,21 @@ class CalculationEngine:
 
     def calc_group_average(self, df_values, target_year):
         weight_year = target_year - 2
-        try: exp = self.data['df_expenditure'].loc[weight_year]
-        except: return pd.Series(np.nan, index=list(self.GROUP_MAPPING.keys())+['전체'])
+        weights = self._precalc_weights.get(weight_year)
+        if weights is None: return pd.Series(0.0, index=list(self.GROUP_MAPPING.keys())+['전체'])
 
+        # Filter values (Should be indexed by Hospital Types)
+        v = df_values.reindex(self.HOSPITAL_TYPES).fillna(0.0)
         results = {}
         for group, members in self.GROUP_MAPPING.items():
-            valid = [m for m in members if m in df_values.index and m in exp.index]
-            if not valid: continue
-            w = exp.loc[valid] / exp.loc[valid].sum()
-            results[group] = (df_values.loc[valid] * w).sum()
+            gw = weights.loc[members]
+            g_sum = gw.sum()
+            if g_sum > 0:
+                results[group] = (v.loc[members] * (gw / g_sum)).sum()
+            else:
+                results[group] = v.loc[members].mean()
         
-        all_m = [m for sub in self.GROUP_MAPPING.values() for m in sub if m in df_values.index]
-        w_all = exp.loc[all_m] / exp.loc[all_m].sum()
-        results['전체'] = (df_values.loc[all_m] * w_all).sum()
+        results['전체'] = (v * weights).sum()
         return pd.Series(results)
 
     def run_full_analysis(self, target_year=2025):
@@ -645,7 +719,9 @@ class CalculationEngine:
             'S1': {}, 'S2': {}, 'Link': {}, 'MEI': {}, 'GDP': {}, 
             'UAF_S1': {}, 'UAF_S2': {},
             'SGR_S1_INDEX': {}, 'SGR_S2_INDEX': {},
-            'Target_S1': {}, 'Target_S2': {}
+            'Target_S1': {}, 'Target_S2': {},
+            'S1_Rescaled': {}, 'S2_Rescaled': {},
+            'IndexMethod': {}
         }
         details = {'mei_raw': {}, 'sgr_factors': {}}
         
@@ -659,8 +735,56 @@ class CalculationEngine:
             'mei_growth': {},   # MEI 증가율 (%)
             'factor_growth': {}, # 생산요소 물가 증가율
             'scenario_adjustments': {}, # 16가지 시나리오별 조정률
-            'ar_analysis': {} # AR모형 시나리오 분석 (30개)
+            'ar_analysis': {}, # AR모형 시나리오 분석 (30개)
+            'budget_analysis': {} # 연도별 추가소요재정 분석
         }
+
+        # Helper: Calculate Grouped Results (Rate & Budget)
+        def calc_grouped_results(rates, base_amounts):
+            # rates: Series of rates (e.g. 2.5 for 2.5%)
+            # base_amounts: DataFrame or Series of base expenditure (e.g. 2024 expenditure)
+            
+            res = {'rate': {}, 'budget': {}}
+            
+            # Simple simulation: Budget = Base * (Rate/100)
+            # Or if Rate is index change: Budget = Base * (1 + Rate/100) - Base = Base * Rate/100
+            # Let's assume 'rates' are Percentage Increases (e.g. 1.6%).
+            # Additional Budget = Base * (Rate / 100)
+            
+            # Individual types
+            total_budget = 0
+            for ht in self.HOSPITAL_TYPES:
+                r = rates.get(ht, 0.0)
+                base = base_amounts.get(ht, 0.0)
+                add_budget = base * (r / 100)
+                res['rate'][ht] = round(r, 2)
+                res['budget'][ht] = round(add_budget, 0)
+                total_budget += add_budget
+            
+            # Groups
+            for grp, members in self.GROUP_MAPPING.items():
+                grp_budget = 0
+                grp_base_sum = 0
+                for m in members:
+                    r = rates.get(m, 0.0)
+                    base = base_amounts.get(m, 0.0)
+                    grp_budget += base * (r / 100)
+                    grp_base_sum += base
+                
+                res['budget'][grp] = round(grp_budget, 0)
+                if grp_base_sum > 0:
+                    res['rate'][grp] = round((grp_budget / grp_base_sum) * 100, 2)
+                else:
+                    res['rate'][grp] = 0.0
+            
+            res['budget']['전체'] = round(total_budget, 0)
+            total_base = sum(base_amounts.get(ht, 0.0) for ht in self.HOSPITAL_TYPES)
+            if total_base > 0:
+                 res['rate']['전체'] = round((total_budget / total_base) * 100, 2)
+            else:
+                 res['rate']['전체'] = 0.0
+            
+            return res
         
         # Helper: Combined for UAF (Rates) - already includes group results in the Series
         def get_rate_combined(rates):
@@ -693,7 +817,7 @@ class CalculationEngine:
         for y in years:
             # Initialize for safety (prevent JS error on frontend if calc fails)
             # 1. Initialize for the year y
-            for k in ['S1', 'S2', 'Link', 'MEI', 'GDP', 'UAF_S1', 'UAF_S2', 'SGR_S1_INDEX', 'SGR_S2_INDEX', 'Target_S1', 'Target_S2']:
+            for k in ['S1', 'S2', 'Link', 'MEI', 'GDP', 'UAF_S1', 'UAF_S2', 'SGR_S1_INDEX', 'SGR_S2_INDEX', 'Target_S1', 'Target_S2', 'S1_Rescaled', 'S2_Rescaled']:
                 history[k][y] = {}
 
             # 2. Base MEI Calculation (Current Year y gets T-2 data)
@@ -726,6 +850,52 @@ class CalculationEngine:
                         history['S2'][y] = get_combined(cf_s2_idx, y) # NO RV Deduction for SGR as requested
             except Exception as e:
                 print(f"[WARN] SGR S1/S2 calc failed for {y}: {e}")
+
+            # [NEW] Rescaling Logic (Rescale S1/S2 to match Contract Overall Rate)
+            try:
+                # Get Contract Overall Rate for Year y
+                contract_rate = None
+                df_contract = self.data.get('df_contract', pd.DataFrame())
+                if not df_contract.empty and y in df_contract.index and '인상율_전체' in df_contract.columns:
+                     val = df_contract.loc[y, '인상율_전체']
+                     if pd.notna(val):
+                         contract_rate = float(val)
+
+                if contract_rate is not None and history['S1'][y] and '전체' in history['S1'][y]:
+                    # Calculation of Current Overall Rates
+                    # history['S1'][y] contains rounded percentages. For precision, let's recalculate unrounded overall if possible.
+                    # Or just use the '전체' value from history which is the weighted average.
+                    
+                    # 1. S1 Rescaling
+                    current_s1_avg = history['S1'][y]['전체'] # Percentage value (e.g. 2.05)
+                    if abs(current_s1_avg) > 0.0001:
+                        scale_factor_s1 = contract_rate / current_s1_avg
+                        # Apply to all
+                        rescaled_s1 = {k: v * scale_factor_s1 for k, v in history['S1'][y].items()}
+                        # Recalculate '전체' just to be sure (it should be contract_rate)
+                        rescaled_s1['전체'] = contract_rate
+                        history['S1_Rescaled'][y] = {k: round(v, 2) for k, v in rescaled_s1.items()}
+                    else:
+                         history['S1_Rescaled'][y] = history['S1'][y] # No scaling if 0
+
+                    # 2. S2 Rescaling
+                    current_s2_avg = history['S2'][y]['전체']
+                    if abs(current_s2_avg) > 0.0001:
+                        scale_factor_s2 = contract_rate / current_s2_avg
+                        rescaled_s2 = {k: v * scale_factor_s2 for k, v in history['S2'][y].items()}
+                        rescaled_s2['전체'] = contract_rate
+                        history['S2_Rescaled'][y] = {k: round(v, 2) for k, v in rescaled_s2.items()}
+                    else:
+                         history['S2_Rescaled'][y] = history['S2'][y]
+                else:
+                    # Fallback if no contract data or SGR calc failed
+                    history['S1_Rescaled'][y] = history['S1'][y] if history['S1'][y] else {}
+                    history['S2_Rescaled'][y] = history['S2'][y] if history['S2'][y] else {}
+
+            except Exception as e_rescale:
+                print(f"[WARN] Rescaling logic failed for {y}: {e_rescale}")
+                history['S1_Rescaled'][y] = history['S1'][y] if history['S1'][y] else {}
+                history['S2_Rescaled'][y] = history['S2'][y] if history['S2'][y] else {}
 
             # 4. Macro Indicator Models (GDP, MEI, Link) - Apply Simple Subtraction
             # [USER REQUEST] 2025 adjustment = (Indicator Index - RV Index) * 100
@@ -804,6 +974,43 @@ class CalculationEngine:
                     details['sgr_factors'][y] = factors_dict
             except Exception as e:
                 print(f"[WARN] SGR Components/Index calc failed for {y}: {e}")
+
+            # 6. Index Method (Section 14)
+            # [USER REQUEST] Index = MEI Scenario - (Revenue/Institutions Growth)
+            try:
+                calc_y = y - 2
+                prev_y = y - 3
+                df_exp = self.data['df_expenditure']
+                df_num = self.data['df_num']
+                
+                if calc_y in df_exp.index and prev_y in df_exp.index and calc_y in df_num.index and prev_y in df_num.index:
+                    # Calculate Individual Revenue Growth (%)
+                    rev_per_inst_curr = df_exp.loc[calc_y, self.HOSPITAL_TYPES] / df_num.loc[calc_y, self.HOSPITAL_TYPES]
+                    rev_per_inst_prev = df_exp.loc[prev_y, self.HOSPITAL_TYPES] / df_num.loc[prev_y, self.HOSPITAL_TYPES]
+                    rev_growth = ((rev_per_inst_curr / rev_per_inst_prev) - 1) * 100
+                    
+                    # Store Revenue Growth (Indiv + Group)
+                    indiv_rev = rev_growth.round(2).to_dict()
+                    group_rev = self.calc_group_average(rev_growth / 100 + 1, y) # Weighting growth indices
+                    group_rev_pct = ((group_rev - 1) * 100).round(2).to_dict()
+                    
+                    history['IndexMethod'][y] = {
+                        'rev_growth': {**indiv_rev, **group_rev_pct},
+                        'scenarios': {}
+                    }
+                    
+                    if df_mei is not None:
+                        for sn in df_mei.columns:
+                            mei_growth_pct = (df_mei[sn] - 1) * 100
+                            adj_rate = mei_growth_pct - rev_growth
+                            
+                            indiv_adj = adj_rate.round(2).to_dict()
+                            group_adj_idx = self.calc_group_average(adj_rate / 100 + 1, y)
+                            group_adj_pct = ((group_adj_idx - 1) * 100).round(2).to_dict()
+                            
+                            history['IndexMethod'][y]['scenarios'][sn] = {**indiv_adj, **group_adj_pct}
+            except Exception as e:
+                print(f"[WARN] Index Method calc failed for {y}: {e}")
 
             # 5. Bulk Data (Monitoring) - Range 2014-2028
             try:
@@ -888,74 +1095,310 @@ class CalculationEngine:
                                         f_growth[col] = round(rate * 100, 3)
                         bulk_sgr['factor_growth'][y] = f_growth
 
-                    # Scenario Adjustments
+                    # [OPTIMIZED] Scenario Adjustments - Vectorized
                     if df_mei is not None and uaf_s1 is not None and uaf_s2 is not None:
                         summary_cols = ['평균', '최대', '최소', '중위수']
                         other_cols = [c for c in df_mei.columns if c not in summary_cols]
                         ordered_cols = summary_cols + other_cols
                         
                         bulk_sgr['scenario_adjustments'][y] = {}
-                        for sn in ordered_cols:
-                            if sn in df_mei.columns:
-                                bulk_sgr['scenario_adjustments'][y][sn] = {
-                                    'S1': get_combined(df_mei[sn] * (1 + uaf_s1), y),
-                                    'S2': get_combined(df_mei[sn] * (1 + uaf_s2), y)
-                                }
+                        
+                        # Calculate all scenarios for S1 and S2 at once
+                        w_year = y - 2
+                        weights = self._precalc_weights.get(w_year)
+                        
+                        if weights is not None:
+                            # Pre-calculate base adjustment series
+                            # S1: CF = MEI * (1+UAF_S1)
+                            # S2: CF = MEI * (1+UAF_S2)
+                            h_types = self.HOSPITAL_TYPES
+                            s1_adj = 1 + uaf_s1[h_types]
+                            s2_adj = 1 + uaf_s2[h_types]
+                            
+                            # Matrix operations for all scenarios
+                            mei_matrix = df_mei[ordered_cols].reindex(h_types).fillna(1.0)
+                            cf_s1_matrix = mei_matrix.mul(s1_adj, axis=0)
+                            cf_s2_matrix = mei_matrix.mul(s2_adj, axis=0)
+                            
+                            # Percentage terms: (CF - 1)*100
+                            cf_s1_pct = ((cf_s1_matrix - 1) * 100).round(2)
+                            cf_s2_pct = ((cf_s2_matrix - 1) * 100).round(2)
+                            
+                            # Group averages for all scenarios
+                            for sn in ordered_cols:
+                                res_s1 = cf_s1_pct[sn].to_dict()
+                                res_s2 = cf_s2_pct[sn].to_dict()
+                                
+                                # Add group averages
+                                for g, members in self.GROUP_MAPPING.items():
+                                    gw = weights.loc[members]
+                                    g_sum = gw.sum()
+                                    if g_sum > 0:
+                                        res_s1[g] = round((cf_s1_pct.loc[members, sn] * (gw / g_sum)).sum(), 2)
+                                        res_s2[g] = round((cf_s2_pct.loc[members, sn] * (gw / g_sum)).sum(), 2)
+                                    else:
+                                        res_s1[g] = round(cf_s1_pct.loc[members, sn].mean(), 2)
+                                        res_s2[g] = round(cf_s2_pct.loc[members, sn].mean(), 2)
+                                
+                                # Total average
+                                res_s1['전체'] = round((cf_s1_pct.loc[h_types, sn] * weights).sum(), 2)
+                                res_s2['전체'] = round((cf_s2_pct.loc[h_types, sn] * weights).sum(), 2)
+                                
+                                bulk_sgr['scenario_adjustments'][y][sn] = {'S1': res_s1, 'S2': res_s2}
+                        else:
+                            # Fallback to slower method if no weights
+                            for sn in ordered_cols:
+                                if sn in df_mei.columns:
+                                    bulk_sgr['scenario_adjustments'][y][sn] = {
+                                        'S1': get_combined(df_mei[sn] * (1 + uaf_s1), y),
+                                        'S2': get_combined(df_mei[sn] * (1 + uaf_s2), y)
+                                    }
 
-                        # --- AR Model Scenario Analysis (2020-2028) ---
+                        # --- [Optimized] AR Model Scenario Analysis (2020-2028) ---
                         if 2020 <= y <= 2028:
-                            ar_results = []
+                            ar_results_all = {}
+                            # Load weights once per year
+                            try:
+                                exp_w = self.data['df_expenditure'].loc[y-2].reindex(self.HOSPITAL_TYPES).fillna(0)
+                                total_exp = exp_w.sum()
+                                if total_exp > 0:
+                                    normalized_w = exp_w / total_exp
+                                else:
+                                    normalized_w = pd.Series(1.0/len(self.HOSPITAL_TYPES), index=self.HOSPITAL_TYPES)
+                            except:
+                                normalized_w = pd.Series(1.0/len(self.HOSPITAL_TYPES), index=self.HOSPITAL_TYPES)
+
                             base_rate_keys = ['GDP', 'MEI', 'Link']
                             mei_scenario_keys = ['I1M2Z2', '평균']
                             r_values = [1.0, 0.75, 0.5, 0.25, 0.15, 0.0]
-                            
-                            # expenditure for weighting (y-2)
-                            try:
-                                exp_weight = self.data['df_expenditure'].loc[y-2].reindex(self.HOSPITAL_TYPES).fillna(0)
-                                total_exp = exp_weight.sum()
-                            except:
-                                exp_weight = pd.Series(1.0, index=self.HOSPITAL_TYPES)
-                                total_exp = len(self.HOSPITAL_TYPES)
 
-                            for br_key in base_rate_keys:
-                                if y in history[br_key] and history[br_key][y]:
-                                    base_rates = history[br_key][y]
+                            for m_key in ['S1', 'S2']:
+                                ar_results = []
+                                for br_key in base_rate_keys:
+                                    if y in history[br_key] and history[br_key][y]:
+                                        # Pre-convert base rates to Series
+                                        base_rates_s = pd.Series({t: history[br_key][y].get(t, 0) for t in self.HOSPITAL_TYPES})
+                                        
+                                        for mei_sn in mei_scenario_keys:
+                                            if mei_sn in bulk_sgr['scenario_adjustments'][y]:
+                                                cf_s_dict = bulk_sgr['scenario_adjustments'][y][mei_sn][m_key]
+                                                cf_s_s = pd.Series({t: cf_s_dict.get(t, 0) for t in self.HOSPITAL_TYPES})
+                                                
+                                                # Weighted average CF_S & adjustment vector
+                                                avg_cf_s = (cf_s_s * normalized_w).sum()
+                                                cf_adj = cf_s_s - avg_cf_s
+                                                
+                                                for r in r_values:
+                                                    # Vectorized result calculation
+                                                    final_rates_s = base_rates_s + r * cf_adj
+                                                    
+                                                    # Result composition
+                                                    res_combined = {t: round(v, 2) for t, v in final_rates_s.to_dict().items()}
+                                                    
+                                                    for group, members in self.GROUP_MAPPING.items():
+                                                        m_w = normalized_w.loc[members]
+                                                        sum_w = m_w.sum()
+                                                        if sum_w > 0:
+                                                            res_combined[group] = round((final_rates_s.loc[members] * (m_w/sum_w)).sum(), 2)
+                                                    
+                                                    res_combined['전체'] = round((final_rates_s * normalized_w).sum(), 2)
+                                                    
+                                                    ar_results.append({
+                                                        'base_rate': br_key,
+                                                        'mei_scenario': mei_sn,
+                                                        'r': r,
+                                                        'rates': res_combined
+                                                    })
+                                ar_results_all[m_key] = ar_results
+                            bulk_sgr['ar_analysis'][y] = ar_results_all
+
+                            history_constrained = {}
+                            df_contract = self.data['df_contract']
+                            base_y = y - 2
+                            rate_py = pd.Series(0.75, index=self.HOSPITAL_TYPES)
+                            if 'df_rate_py' in self.data and base_y in self.data['df_rate_py'].index:
+                                rate_py = self.data['df_rate_py'].loc[base_y].reindex(self.HOSPITAL_TYPES).fillna(0.75)
+                            
+                            base_amt = pd.Series(0.0, index=self.HOSPITAL_TYPES)
+                            if base_y in self.data['df_expenditure'].index:
+                                raw_exp = self.data['df_expenditure'].loc[base_y].reindex(self.HOSPITAL_TYPES).fillna(0)
+                                base_amt = raw_exp * rate_py
+
+                            budget_data = {'Macro': {}, 'S1': {}, 'S2': {}} 
+
+                            # --- [NEW] 1. Macro Baselines ---
+                            for macro_key in ['GDP', 'MEI', 'Link']:
+                                if y in history[macro_key] and history[macro_key][y]:
+                                    m_rates = pd.Series(history[macro_key][y]) # Percents
+                                    budget_data['Macro'][macro_key] = calc_grouped_results(m_rates, base_amt)
+
+                            # --- [NEW] 2. SGR AR Baselines (Target r=0.15, MEI=Average) --- 
+                            target_r = 0.15
+                            target_mei = '평균'
+                            
+                            for m_key in ['S1', 'S2']:
+                                ar_list = ar_results_all.get(m_key, [])
+                                
+                                # Find AR1 (GDP), AR2 (MEI), AR3 (Link)
+                                ar1 = next((x for x in ar_list if x['base_rate'] == 'GDP' and x['mei_scenario'] == target_mei and abs(x['r']-target_r)<0.001), None)
+                                ar2 = next((x for x in ar_list if x['base_rate'] == 'MEI' and x['mei_scenario'] == target_mei and abs(x['r']-target_r)<0.001), None)
+                                ar3 = next((x for x in ar_list if x['base_rate'] == 'Link' and x['mei_scenario'] == target_mei and abs(x['r']-target_r)<0.001), None)
+                                
+                                if ar1: budget_data[m_key]['AR1'] = calc_grouped_results(pd.Series(ar1['rates']), base_amt)
+                                if ar2: budget_data[m_key]['AR2'] = calc_grouped_results(pd.Series(ar2['rates']), base_amt)
+                                if ar3: budget_data[m_key]['AR3'] = calc_grouped_results(pd.Series(ar3['rates']), base_amt)
+                                
+                                if ar1 and ar2 and ar3:
+                                    # AR Average
+                                    r1 = pd.Series(ar1['rates'])
+                                    r2 = pd.Series(ar2['rates'])
+                                    r3 = pd.Series(ar3['rates'])
+                                    avg_rates = (r1 + r2 + r3) / 3.0
+                                    budget_data[m_key]['AR_Average'] = calc_grouped_results(avg_rates, base_amt)
+                            
+                            # --- [NEW] 3. Budget Constraints Analysis (5 Scenarios) ---
+                            # Generalized for any year y
+                            try:
+                                # Initialize bulk storage for this year if not exists
+                                if 'budget_constraints' not in bulk_sgr:
+                                    bulk_sgr['budget_constraints'] = {}
+                                
+                                # Use y-1 as the base for lookback (previous year)
+                                py = y - 1
+                                
+                                # Check if we have sufficient contract history
+                                # We need at least up to y-5 for 5-year scenarios
+                                has_history = (py in df_contract.index)
+                                
+                                if has_history:
+                                    # Reference for Scaling: S2 AR Average (Total)
+                                    ref_budget = 0
+                                    ref_rate = 0
                                     
-                                    for mei_sn in mei_scenario_keys:
-                                        if mei_sn in bulk_sgr['scenario_adjustments'][y]:
-                                            # CF_S,i (S1 adjustment rate %)
-                                            cf_s_dict = bulk_sgr['scenario_adjustments'][y][mei_sn]['S1']
-                                            cf_s_indiv = pd.Series({t: cf_s_dict[t] for t in self.HOSPITAL_TYPES})
+                                    if 'S2' in budget_data and 'AR_Average' in budget_data['S2']:
+                                        ref_budget = budget_data['S2']['AR_Average']['budget'].get('전체', 0)
+                                        ref_rate = budget_data['S2']['AR_Average']['rate'].get('전체', 0)
+                                    elif 'S1' in budget_data and 'AR_Average' in budget_data['S1']:
+                                        ref_budget = budget_data['S1']['AR_Average']['budget'].get('전체', 0)
+                                        ref_rate = budget_data['S1']['AR_Average']['rate'].get('전체', 0)
+                                    
+                                    if ref_budget > 0 and ref_rate > 0:
+                                        # Historical Data Fetching
+                                        # Budget (Additional Finance)
+                                        b_py = df_contract.loc[py, '추가소요재정_전체'] if py in df_contract.index else 0
+                                        b_py_3 = df_contract.loc[py-3, '추가소요재정_전체'] if (py-3) in df_contract.index else 0
+                                        b_py_4 = df_contract.loc[py-4, '추가소요재정_전체'] if (py-4) in df_contract.index else 0
+                                        
+                                        # Rate (Increase Rate)
+                                        r_py = df_contract.loc[py, '인상율_전체'] if py in df_contract.index else 0
+                                        r_py_1 = df_contract.loc[py-1, '인상율_전체'] if (py-1) in df_contract.index else 0
+                                        r_py_2 = df_contract.loc[py-2, '인상율_전체'] if (py-2) in df_contract.index else 0
+                                        r_py_3 = df_contract.loc[py-3, '인상율_전체'] if (py-3) in df_contract.index else 0
+                                        r_py_4 = df_contract.loc[py-4, '인상율_전체'] if (py-4) in df_contract.index else 0
+
+                                        # --- [Revised] Scenarios Definitions ---
+                                        # Instead of one scale factor, we define the TARGET value for each scenario.
+                                        targets = {}
+
+                                        # S1.1: 5y Budget CAGR (py-4 -> py) applied to py
+                                        if b_py_4 > 0 and b_py > 0:
+                                            cagr_11 = (b_py / b_py_4)**(1/4) - 1
+                                            target_b_11 = b_py * (1 + cagr_11)
+                                            targets['S1_1'] = {'type': 'budget', 'value': target_b_11}
+                                        else: 
+                                            targets['S1_1'] = {'type': 'budget', 'value': b_py}
+
+                                        # S1.2: 4y Budget CAGR (py-3 -> py) applied to py
+                                        if b_py_3 > 0 and b_py > 0:
+                                            cagr_12 = (b_py / b_py_3)**(1/3) - 1
+                                            target_b_12 = b_py * (1 + cagr_12)
+                                            targets['S1_2'] = {'type': 'budget', 'value': target_b_12}
+                                        else:
+                                            targets['S1_2'] = {'type': 'budget', 'value': b_py}
+
+                                        # S2.1: 5y Rate Avg (py-4 to py)
+                                        avg_r_21 = (r_py_4 + r_py_3 + r_py_2 + r_py_1 + r_py) / 5
+                                        targets['S2_1'] = {'type': 'rate', 'value': avg_r_21}
+
+                                        # S2.2: 3y Rate Avg (py-2 to py)
+                                        avg_r_22 = (r_py_2 + r_py_1 + r_py) / 3
+                                        targets['S2_2'] = {'type': 'rate', 'value': avg_r_22}
+
+                                        # S2.3: Prev Year Rate (py)
+                                        targets['S2_3'] = {'type': 'rate', 'value': r_py}
+
+                                        # --- Apply Constraints to EACH Model individually ---
+                                        # For each scenario, we create a full copy of budget_data structure, 
+                                        # but every single model inside it is re-scaled to match the target.
+                                        
+                                        history_constrained_year = {}
+
+                                        for s_key, t_info in targets.items():
+                                            target_val = t_info['value']
+                                            target_type = t_info['type']
                                             
-                                            # Weighted average CF_S
-                                            avg_cf_s = (cf_s_indiv * exp_weight).sum() / total_exp if total_exp > 0 else cf_s_indiv.mean()
+                                            # Create a new structure for this scenario
+                                            scenario_result = {}
                                             
-                                            # CF_adj_i = CF_S,i - avg_cf_s
-                                            cf_adj = cf_s_indiv - avg_cf_s
+                                            for cat, sub in budget_data.items(): # Macro, S1, S2
+                                                scenario_result[cat] = {}
+                                                for model_name, content in sub.items(): # GDP, AR1, AR_Average...
+                                                    # content = {'rate': {type: val}, 'budget': {type: val}}
+                                                    
+                                                    # 1. Determine current total for this specific model
+                                                    current_total_budget = content['budget'].get('전체', 0)
+                                                    current_avg_rate = content['rate'].get('전체', 0)
+                                                    
+                                                    # 2. Calculate k (scaling factor) for THIS model
+                                                    k = 1.0
+                                                    if target_type == 'budget':
+                                                        if current_total_budget > 0:
+                                                            k = target_val / current_total_budget
+                                                    elif target_type == 'rate':
+                                                        if current_avg_rate > 0:
+                                                            k = target_val / current_avg_rate
+                                                    
+                                                    # 3. Apply k to create new content
+                                                    new_content = {'rate': {}, 'budget': {}}
+                                                    
+                                                    # Scaling Logic:
+                                                    # If we scale Rate by k, Budget scales roughly by k (Budget ~ Rate * Base).
+                                                    # If we scale Budget by k, Rate scales roughly by k.
+                                                    # So valid for both: New_Value = Old_Value * k
+                                                    
+                                                    for ht, val in content['rate'].items():
+                                                        new_content['rate'][ht] = round(val * k, 2)
+                                                    
+                                                    for ht, val in content['budget'].items():
+                                                        new_content['budget'][ht] = round(val * k, 0)
+                                                    
+                                                    # Force the Total to be exactly target_val? 
+                                                    # Rounding might cause slight drift, but k-scaling is the standard method.
+                                                    # We will trust the scaled values.
+                                                    
+                                                    scenario_result[cat][model_name] = new_content
                                             
-                                            for r in r_values:
-                                                final_rates_indiv = {}
-                                                for t in self.HOSPITAL_TYPES:
-                                                    # Base_Rate_i + r * CF_adj_i
-                                                    final_rates_indiv[t] = float(base_rates[t]) + r * float(cf_adj[t])
-                                                
-                                                # Calculate group averages
-                                                rates_series = pd.Series(final_rates_indiv)
-                                                group_avgs = self.calc_group_average(rates_series/100 + 1, y) # calc_group_average expects index format
-                                                final_rates_combined = {**{t: round(v, 2) for t, v in final_rates_indiv.items()}, 
-                                                                        **{k: round((v-1)*100, 2) for k, v in group_avgs.to_dict().items()}}
-                                                
-                                                ar_results.append({
-                                                    'base_rate': br_key,
-                                                    'mei_scenario': mei_sn,
-                                                    'r': r,
-                                                    'rates': final_rates_combined
-                                                })
-                            bulk_sgr['ar_analysis'][y] = ar_results
+                                            history_constrained_year[s_key] = scenario_result
+
+                                        # Store in bulk_sgr
+                                        bulk_sgr['budget_constraints'][y] = history_constrained_year
+                                        
+                            except Exception as e:
+                                print(f"Error calculating budget constraints for {y}: {str(e)}")
+                                import traceback
+                                traceback.print_exc()
+
+
+                            bulk_sgr.setdefault('budget_analysis', {})[y] = budget_data
+                                    
             except Exception as e:
                 print(f"[WARN] Bulk SGR calc failed for {y}: {e}")
 
         return history, details, bulk_sgr
+
+# ----------------------------------------------------------------------
+# 2.5 AI Optimization Integrated via ai_optimizer.py
+
 
 # ----------------------------------------------------------------------
 # 3. Flask Server
@@ -973,10 +1416,37 @@ def get_cached_analysis():
     
     if _cached_analysis is None:
         print("[INFO] 초기 분석 실행 중...")
-        engine = CalculationEngine(processor.raw_data)
-        history, components, bulk_sgr = engine.run_full_analysis(target_year=2025)
+        calc_engine = CalculationEngine(processor.raw_data)
+        history, components, bulk_sgr = calc_engine.run_full_analysis(target_year=2025)
         
-        groups_list = engine.HOSPITAL_TYPES + ['병원(계)', '의원(계)', '치과(계)', '한방(계)', '약국(계)', '전체']
+        # --- AI Integration Step (High Performance) ---
+        try:
+            if AI_MODULE_AVAILABLE:
+                print("[Info] Running AI Optimization on App Load...")
+                ai_engine = AIOptimizationEngine(data_frames=processor.raw_data)
+                
+                # Fetch S1 Model, MEI-Average results as baseline for year 2026
+                # (Assuming bulk_sgr['scenario_adjustments'][2026]['평균']['S1'] exists)
+                sgr_ref = {}
+                try:
+                    target_y = 2026
+                    if 'scenario_adjustments' in bulk_sgr and target_y in bulk_sgr['scenario_adjustments']:
+                        sgr_ref = bulk_sgr['scenario_adjustments'][target_y].get('평균', {}).get('S1', {})
+                    
+                    # If empty, fallback to simple history or defaults
+                    if not sgr_ref:
+                        sgr_ref = {'병원(계)': 1.96, '의원': 1.9, '치과(계)': 1.96, '한방(계)': 1.96, '약국': 2.8}
+                except:
+                    sgr_ref = {}
+
+                ai_results = ai_engine.run_full_analysis(target_year=2026, sgr_results=sgr_ref)
+                if ai_results:
+                    bulk_sgr['ai_prediction'] = ai_results
+                    print("[SUCCESS] AI Optimization analysis integrated with S1 Reference.")
+        except Exception as e:
+            print(f"[Error] AI Auto-run Failed: {e}")
+
+        groups_list = calc_engine.HOSPITAL_TYPES + ['병원(계)', '의원(계)', '치과(계)', '한방(계)', '약국(계)', '전체']
         scenarios_list = list(components['mei_raw'][2025].keys()) if 2025 in components['mei_raw'] else ['평균', '최대', '최소', '중위수']
         
         _cached_analysis = {
@@ -993,26 +1463,64 @@ def get_cached_analysis():
     
     return _cached_analysis
 
+# Recursive check for NaN/Inf/Numpy types to prevent JSON errors
+def sanitize_data(obj):
+    if isinstance(obj, dict):
+        return {str(k): sanitize_data(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_data(x) for x in obj]
+    elif isinstance(obj, (bool, np.bool_)):
+        return bool(obj)
+    elif isinstance(obj, (int, np.integer)):
+        return int(obj)
+    elif isinstance(obj, (float, np.floating)):
+        if pd.isna(obj) or np.isinf(obj): return None
+        return float(obj)
+    elif hasattr(obj, 'to_dict'):
+        return sanitize_data(obj.to_dict())
+    return obj
+
 @app.route('/')
-def landing():
-    """Landing page with model selection"""
-    return render_template('landing.html')
+def landing_redirect():
+    """Redirect to main application (skipping landing page as requested)"""
+    return redirect(url_for('index'))
+
+@app.route('/ai')
+def ai_dashboard():
+    """AI 최적화 대시보드 페이지"""
+    return render_template('ai_dashboard.html')
 
 @app.route('/app')
 def index():
-    """Main application page"""
+    """Main application page - Runs analysis on first dashboard load"""
     selected_model = request.args.get('model', 'SGR_S2')
+    tab = request.args.get('tab', 'dashboard')
     
-    # 캐시된 분석 결과 사용
-    analysis_data = get_cached_analysis().copy()
+    if tab == 'dashboard':
+        # 대시보드 탭: 캐시된 분석 결과가 있으면 사용, 없으면 분석 실행
+        global _cached_analysis
+        if _cached_analysis is None:
+            # 최초 로딩 시 분석 실행 (이후에는 캐시 사용)
+            print("[INFO] 대시보드 최초 로딩 - 분석 실행 중...")
+            _cached_analysis = get_cached_analysis()
+            print("[SUCCESS] 대시보드 분석 완료!")
+        
+        analysis_data = _cached_analysis.copy()
+    else:
+        # 입력 탭: 원시 데이터만 필요 (빠른 로딩)
+        analysis_data = {
+            'history': {'years': list(range(2014, 2029))},
+            'components': {},
+            'bulk_sgr': {},
+            'groups': ['상급종합', '종합병원', '병원', '요양병원', '의원', '치과병원', '치과의원', '한방병원', '한의원', '약국', '병원(계)', '의원(계)', '치과(계)', '한방(계)', '약국(계)', '전체'],
+            'scenarios': ['평균', '최대', '최소', '중위수'],
+            'model_name_map': {
+                'SGR_S1': 'S1', 'SGR_S2': 'S2', 'MACRO_GDP': 'GDP', 'MACRO_MEI': 'MEI', 'MACRO_LINK': 'Link'
+            }
+        }
+    
     analysis_data['selected_model'] = selected_model
-
-    # Convert pandas Series to dictionaries
-    for k, v in analysis_data.items():
-        if isinstance(v, dict):
-            for sk, sv in v.items():
-                if hasattr(sv, 'to_dict'):
-                    analysis_data[k][sk] = sv.to_dict()
+    analysis_data = sanitize_data(analysis_data)
     
     return render_template('index.html', analysis_data=analysis_data)
 
@@ -1027,7 +1535,7 @@ def simulate():
     if not scenarios_list:
         scenarios_list = ['평균', '최대', '최소', '중위수']
 
-    return jsonify({
+    response_data = {
         'success': True,
         'analysis_data': {
             'history': history,
@@ -1039,7 +1547,49 @@ def simulate():
                 'SGR_S1': 'S1', 'SGR_S2': 'S2', 'MACRO_GDP': 'GDP', 'MACRO_MEI': 'MEI', 'MACRO_LINK': 'Link'
             }
         }
-    })
+    }
+    return jsonify(sanitize_data(response_data))
+
+@app.route('/run_analysis', methods=['POST'])
+def run_analysis():
+    """[NEW] 분석 실행 엔드포인트 - 사용자가 버튼을 클릭할 때만 실행"""
+    try:
+        print("[INFO] 사용자 요청으로 분석 실행 중...")
+        global _cached_analysis
+        
+        # 전체 분석 실행
+        engine = CalculationEngine(processor.raw_data)
+        history, components, bulk_sgr = engine.run_full_analysis(target_year=2025)
+        
+        groups_list = engine.HOSPITAL_TYPES + ['병원(계)', '의원(계)', '치과(계)', '한방(계)', '약국(계)', '전체']
+        scenarios_list = list(components['mei_raw'][2025].keys()) if 2025 in components['mei_raw'] else ['평균', '최대', '최소', '중위수']
+        
+        # 캐시 업데이트
+        _cached_analysis = {
+            'history': history,
+            'components': components,
+            'bulk_sgr': bulk_sgr,
+            'groups': groups_list,
+            'scenarios': scenarios_list,
+            'model_name_map': {
+                'SGR_S1': 'S1', 'SGR_S2': 'S2', 'MACRO_GDP': 'GDP', 'MACRO_MEI': 'MEI', 'MACRO_LINK': 'Link'
+            }
+        }
+        
+        print("[SUCCESS] 분석 완료 및 캐시 업데이트!")
+        
+        return jsonify({
+            'success': True,
+            'analysis_data': sanitize_data(_cached_analysis)
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 
 @app.route('/save_to_excel_file', methods=['POST'])
 def save_to_excel_file():
@@ -1057,14 +1607,20 @@ def save_to_excel_file():
     else:
         return jsonify({'success': False, 'error': msg})
 
-@app.route('/download_ar/<int:year>')
-def download_ar(year):
+@app.route('/download_ar/<int:year>/<string:model_type>')
+def download_ar(year, model_type):
     """AR 모형 시나리오 분석 결과를 엑셀로 내보내기"""
     analysis = get_cached_analysis()
-    ar_data = analysis['bulk_sgr']['ar_analysis'].get(year, [])
+    ar_data_all = analysis['bulk_sgr']['ar_analysis'].get(year, {})
+    
+    # If it's the old list format (for backward compatibility during dev) or missing
+    if isinstance(ar_data_all, list) and model_type == 'S1':
+        ar_data = ar_data_all
+    else:
+        ar_data = ar_data_all.get(model_type, [])
     
     if not ar_data:
-        return "데이터가 없습니다. (2020-2028년 범위 내에서만 지원됩니다.)", 404
+        return f"{model_type} 모델에 대한 데이터가 없습니다. (2020-2028년 범위 내에서만 지원됩니다.)", 404
 
     # 데이터프레임 생성
     rows = []
@@ -1104,8 +1660,122 @@ def download_ar(year):
     return send_file(output, as_attachment=True, download_name=f"AR_Scenario_Analysis_{year}.xlsx")
 
 
-@app.route('/download/<int:year>')
+@app.route('/download_budget/<int:year>')
+def download_budget(year):
+    """연구수가 및 추가소요재정 분석 결과를 엑셀로 내보내기"""
+    analysis = get_cached_analysis()
+    b_data = analysis['bulk_sgr'].get('budget_analysis', {}).get(year)
+    
+    if not b_data:
+        return f"해당 연도({year}년)의 분석 데이터가 없습니다.", 404
 
+    rows = []
+    # 1. Macro baseline
+    for m_key, data in b_data.get('Macro', {}).items():
+        # Rate row
+        r_row = {'모델': 'Macro 기초모형', '시나리오': m_key, '구분': '조정률(%)'}
+        r_row.update(data['rate'])
+        rows.append(r_row)
+        # Budget row
+        b_row = {'모델': 'Macro 기초모형', '시나리오': m_key, '구분': '소요재정(억)'}
+        b_row.update(data['budget'])
+        rows.append(b_row)
+
+    # 2. S1 / S2
+    for model in ['S1', 'S2']:
+        m_label = '현행 SGR (S1)' if model == 'S1' else 'SGR 개선 (S2)'
+        for s_key, data in b_data.get(model, {}).items():
+            # Rate row
+            r_row = {'모델': m_label, '시나리오': s_key, '구분': '조정률(%)'}
+            r_row.update(data['rate'])
+            rows.append(r_row)
+            # Budget row
+            b_row = {'모델': m_label, '시나리오': s_key, '구분': '소요재정(억)'}
+            b_row.update(data['budget'])
+            rows.append(b_row)
+
+    df = pd.DataFrame(rows)
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        sheet_name = f'Budget_Analysis_{year}'
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+        
+        ws = writer.sheets[sheet_name]
+        # Column width adjustment
+        for col in ws.columns:
+            max_length = 0
+            column = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except: pass
+            ws.column_dimensions[column].width = max_length + 2
+
+    output.seek(0)
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f'SGR_Budget_Analysis_{year}.xlsx'
+    )
+
+
+@app.route('/download_budget_constrained')
+def download_budget_constrained():
+    """추가소요재정 제약하의 분석 결과를 엑셀로 내보내기"""
+    analysis = get_cached_analysis()
+    c_data = analysis['bulk_sgr'].get('budget_constraints')
+    
+    if not c_data:
+        return "추가소요재정 제약 분석 데이터가 없습니다.", 404
+
+    rows = []
+    scenario_names = {
+        'S1_1': '시나리오 1.1 (5개년 재정증가율 반영)',
+        'S1_2': '시나리오 1.2 (4개년 재정증가율 반영)',
+        'S2_1': '시나리오 2.1 (5개년 평균인상율 반영)',
+        'S2_2': '시나리오 2.2 (3개년 평균인상율 반영)',
+        'S2_3': '시나리오 2.3 (직전연도 인상율 반영)'
+    }
+
+    for key, data in c_data.items():
+        label = scenario_names.get(key, key)
+        # Rate row
+        r_row = {'시나리오': label, '구분': '조정률(%)'}
+        r_row.update(data['rate'])
+        rows.append(r_row)
+        # Budget row
+        b_row = {'시나리오': label, '구분': '소요재정(억)'}
+        b_row.update(data['budget'])
+        rows.append(b_row)
+
+    df = pd.DataFrame(rows)
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        sheet_name = 'Budget_Constrained_Analysis'
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+        
+        ws = writer.sheets[sheet_name]
+        for col in ws.columns:
+            max_length = 0
+            column = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except: pass
+            ws.column_dimensions[column].width = max_length + 2
+
+    output.seek(0)
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='SGR_Budget_Constrained_Analysis_2025.xlsx'
+    )
 @app.route('/get_original_data')
 def get_original_data():
     """원본 데이터를 JSON 형식으로 반환"""
@@ -1121,7 +1791,8 @@ def get_original_data():
 
     print("[API] get_original_data called")
     try:
-        processor.reload_data()
+        # [OPTIMIZATION] Avoid redundant disk reload. Data is already managed by processor.
+        # processor.reload_data() 
         years = list(range(2010, 2029))  # 2010년부터 2028년까지 전체 기간으로 확장
         
         # MEI 물가지수 데이터
@@ -1224,6 +1895,19 @@ def get_original_data():
                  else:
                      weights_data[htype][col] = None
 
+        # 급여율 (Benefit Rates)
+        rate_data = {}
+        df_rate = processor.raw_data.get('df_rate_py', pd.DataFrame())
+        if not df_rate.empty:
+            for htype in hospital_types:
+                rate_data[htype] = {}
+                for year in years:
+                    if year in df_rate.index and htype in df_rate.columns:
+                        val = df_rate.loc[year, htype]
+                        rate_data[htype][str(year)] = clean_val(val)
+                    else:
+                        rate_data[htype][str(year)] = None
+
         return jsonify({
             'mei': mei_data,
             'medical': medical_data,
@@ -1232,7 +1916,38 @@ def get_original_data():
             'gdp': gdp_data,
             'law': law_data,
             'rv': rv_data,
-            'weights': weights_data
+            'weights': weights_data,
+            'benefit_rate': rate_data,
+            'contract': {} # Placeholder until populated
+        })
+
+        # [NEW] 수가계약 (Contract)
+        contract_data = {}
+        df_contract = processor.raw_data.get('df_contract', pd.DataFrame())
+        
+        if not df_contract.empty:
+            for year in years:
+                contract_data[str(year)] = {}
+                if year in df_contract.index:
+                    # User requested '수가인상율_전체' (mapped to '인상율_전체') and '추가소요재정_전체'
+                    for col in ['인상율_전체', '추가소요재정_전체']:
+                        if col in df_contract.columns:
+                            val = df_contract.loc[year, col]
+                            contract_data[str(year)][col] = clean_val(val)
+                        else:
+                             contract_data[str(year)][col] = None
+
+        return jsonify({
+            'mei': mei_data,
+            'medical': medical_data,
+            'cf': cf_data,
+            'population': pop_data,
+            'gdp': gdp_data,
+            'law': law_data,
+            'rv': rv_data,
+            'weights': weights_data,
+            'benefit_rate': rate_data,
+            'contract': contract_data
         })
     except Exception as e:
         import traceback
@@ -1242,15 +1957,11 @@ def get_original_data():
 
 @app.route('/get_excel_raw_data')
 def get_excel_raw_data():
-    """메모리에 로드된 데이터를 반환 (요청 시 파일 리로드하여 최신 상태 반영)"""
+    """메모리에 로드된 데이터를 반환"""
     try:
-        # User requested ability to modify Excel and see results.
-        # Force reload from disk to ensure we serve the latest edits.
-        success = processor.reload_data()
+        # [OPTIMIZATION] Removed forced reload to speed up view switching.
+        # Data remains in sync via save_to_excel_file route logic.
         
-        if not success:
-             return jsonify({'error': '데이터 파일(SGR_data.xlsx)을 열 수 없습니다. 파일이 다른 프로그램(Excel 등)에서 열려있는지 확인해주세요.'}), 503
-
         # 이미 로드된 DataProcessor의 데이터를 활용
         # 매핑: 한글 표시명 -> processor.raw_data 내부 키
         data_map = {
@@ -1261,7 +1972,11 @@ def get_excel_raw_data():
             '건보대상': 'df_pop',
             '연도별환산지수': 'df_sgr_reval',
             '법과제도': 'df_sgr_law',
-            '상대가치변화': 'df_rel_value'
+            '상대가치변화': 'df_rel_value',
+            '기관수': 'df_num',
+            '수가계약결과': 'df_contract',
+            '건보_재정통계': 'df_finance',
+            '급여율': 'df_rate_py'
         }
         
         results = {}
@@ -1295,6 +2010,121 @@ def get_excel_raw_data():
                 }
                 
         return jsonify(results)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ----------------------------------------------------------------------
+# AI 최적화 API 엔드포인트
+# ----------------------------------------------------------------------
+
+@app.route('/api/ai_simulation', methods=['GET'])
+def api_ai_simulation():
+    """AI 시뮬레이션 결과 반환 (k, j 파라미터 최적화)"""
+    if not AI_MODULE_AVAILABLE:
+        return jsonify({'error': 'AI module not available'}), 503
+    
+    try:
+        from ai_optimizer import BudgetFunctionSimulator
+        
+        simulator = BudgetFunctionSimulator('SGR_data.xlsx')
+        best_params, all_results = simulator.find_optimal_parameters(
+            k_range=(1, 5),
+            j_range=(1, 3),
+            years=[2021, 2022, 2023, 2024, 2025]
+        )
+        
+        if best_params is None:
+            return jsonify({'error': 'Simulation failed'}), 500
+        
+        response = {
+            'success': True,
+            'optimal_k': int(best_params['k']),
+            'optimal_j': int(best_params['j']),
+            'mean_error': float(best_params['abs_mean_error']),
+            'std_error': float(best_params.get('std_error', 0)),
+            'year_errors': best_params.get('year_errors', {}),
+            'all_combinations': all_results.to_dict('records') if all_results is not None else []
+        }
+        
+        return jsonify(sanitize_data(response))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ai_optimization', methods=['POST'])
+def api_ai_optimization():
+    """AI 최적화 결과 반환 (S1 MEI-평균 기준 연동)"""
+    if not AI_MODULE_AVAILABLE:
+        return jsonify({'error': 'AI module not available'}), 503
+    
+    try:
+        data = request.json or {}
+        target_year = int(data.get('year') or data.get('target_year', 2026))
+        sgr_results = data.get('sgr_results')
+        
+        # S1 MEI-Average reference data lookup
+        if not sgr_results and _cached_analysis:
+            try:
+                bulk = _cached_analysis.get('bulk_sgr', {})
+                if 'scenario_adjustments' in bulk and target_year in bulk['scenario_adjustments']:
+                    sgr_results = bulk['scenario_adjustments'][target_year].get('평균', {}).get('S1', {})
+            except: pass
+            
+        if not sgr_results:
+            # Fallback if cache not found or year out of range
+            sgr_results = {'병원(계)': 1.96, '의원': 1.9, '치과(계)': 1.96, '한방(계)': 1.96, '약국': 2.8}
+            
+        # 통합 엔진 사용 (고성능)
+        engine = AIOptimizationEngine(data_frames=processor.raw_data)
+        results = engine.run_full_analysis(target_year=target_year, sgr_results=sgr_results)
+        
+        if results is None:
+            return jsonify({'error': 'AI analysis failed'}), 500
+        
+        return jsonify(sanitize_data(results))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ai_full_report', methods=['POST'])
+def api_ai_full_report():
+    """AI 전체 분석 리포트 반환 (S1 MEI-평균 기준 연동)"""
+    if not AI_MODULE_AVAILABLE:
+        return jsonify({'error': 'AI module not available'}), 503
+    
+    try:
+        data = request.json or {}
+        target_year = int(data.get('target_year', 2026))
+        sgr_results = data.get('sgr_results')
+        
+        # S1 MEI-Average reference data lookup
+        if not sgr_results and _cached_analysis:
+            try:
+                bulk = _cached_analysis.get('bulk_sgr', {})
+                if 'scenario_adjustments' in bulk and target_year in bulk['scenario_adjustments']:
+                    sgr_results = bulk['scenario_adjustments'][target_year].get('평균', {}).get('S1', {})
+            except: pass
+
+        if not sgr_results:
+            sgr_results = {'병원(계)': 1.96, '의원': 1.9, '치과(계)': 1.96, '한방(계)': 1.96, '약국': 2.8}
+
+        engine = AIOptimizationEngine(data_frames=processor.raw_data)
+        results = engine.run_full_analysis(target_year=target_year, sgr_results=sgr_results)
+        
+        if results is None:
+            return jsonify({'error': 'AI analysis failed'}), 500
+        
+        return jsonify(sanitize_data(results))
+        
     except Exception as e:
         import traceback
         traceback.print_exc()
