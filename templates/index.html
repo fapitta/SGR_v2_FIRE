@@ -53,6 +53,32 @@
             text-align: center !important;
             vertical-align: middle !important;
         }
+
+        /* Sync Button Loading State */
+        .sync-loading {
+            position: relative;
+            color: transparent !important;
+            pointer-events: none;
+        }
+
+        .sync-loading::after {
+            content: "";
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            top: calc(50% - 8px);
+            left: calc(50% - 8px);
+            border: 2px solid #10b981;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
     </style>
 </head>
 
@@ -72,7 +98,20 @@
                 <li class="nav-item" onclick="switchTab('budget-analysis-view')"><span>💰</span> 추가소요재정제약하의 환산지수조정율</li>
                 <li class="nav-item" onclick="switchTab('ai-prediction')"><span>🧠</span> AI 기반 예측 (2026)</li>
             </nav>
-            <div style="margin-top: auto; display: flex; flex-direction: column; gap: 0.5rem;">
+            <div
+                style="margin-top: auto; display: flex; flex-direction: column; gap: 0.5rem; padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 12px; margin-bottom: 1rem;">
+                <div
+                    style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="width: 8px; height: 8px; background: #10b981; border-radius: 50%;"></span>
+                    User: fapitta1346@gmail.com
+                </div>
+                <button class="glass-btn"
+                    style="width: 100%; text-align: left; background: rgba(244, 63, 94, 0.1); color: #f43f5e; border-color: rgba(244, 63, 94, 0.2);"
+                    onclick="location.href='/logout'">
+                    <span>🚪</span> 로그아웃 (Logout)
+                </button>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
                 <button class="glass-btn" style="width: 100%; text-align: left;" onclick="location.href='/'">🏠 모형 선택으로
                     돌아가기</button>
                 <button class="primary" style="width: 100%;" onclick="exportExcel()">💾 엑셀 보고서 다운로드</button>
@@ -121,7 +160,11 @@
                             </div>
                         </div>
                     </div>
-                    <div style="display: flex; gap: 0.8rem; height: fit-content;">
+                    <div style="display: flex; gap: 0.8rem; height: fit-content; align-items: center;">
+                        <button id="syncBtn" class="glass-btn highlight-btn" onclick="triggerSync()"
+                            style="border: 1.5px solid var(--success); background: rgba(16, 185, 129, 0.1); color: #10b981; font-weight: 700;">
+                            🔄 실시간 데이터 동기화
+                        </button>
                         <button class="glass-btn highlight-btn" onclick="switchTab('data-entry')"
                             style="border: 1.5px solid var(--accent-primary); background: rgba(99, 102, 241, 0.1);">
                             📋 분석에 사용된 기초자료 보기/수정
@@ -226,6 +269,7 @@
                     <button class="category-tab" onclick="switchDataCategory('rv', this)">🔄 상대가치변화</button>
                     <button class="category-tab" onclick="switchDataCategory('benefit-rate', this)">📑 급여율</button>
                     <button class="category-tab" onclick="switchDataCategory('contract', this)">📑 수가계약</button>
+                    <button class="category-tab" onclick="switchDataCategory('finance', this)">💰 건보_재정통계</button>
                 </div>
 
                 <!-- Data Input Forms -->
@@ -491,6 +535,32 @@
                             </div>
                         </div>
                     </div>
+                    <!-- 11. Finance -->
+                    <div id="data-finance" class="data-category-content">
+                        <div class="glass" style="padding: 2rem; margin-top: 1.5rem;">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                                <h3 style="border-left: 4px solid var(--accent-secondary); padding-left: 0.5rem;">
+                                    건보_재정통계 (원단위)</h3>
+                                <div class="year-badge">2022년 이후 수정 가능</div>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="finance-table" class="editable-table">
+                                    <thead>
+                                        <tr>
+                                            <th>항목</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="finance-table-body"></tbody>
+                                </table>
+                            </div>
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
+                                <button class="secondary" onclick="resetFinanceData()">🔄 원본 복원</button>
+                                <button class="primary" onclick="saveFinanceData()">💾 임시 저장 (시뮬레이션 반영)</button>
+                            </div>
+                        </div>
+                    </div>
+
 
                 </div>
             </section>
@@ -858,6 +928,40 @@
         document.addEventListener('DOMContentLoaded', () => {
             if (typeof initApp === 'function') initApp();
         });
+
+        // 실시간 데이터 동기화 기능
+        async function triggerSync() {
+            const btn = document.getElementById('syncBtn');
+            const originalText = btn.innerHTML;
+
+            if (confirm('구글 시트에서 최신 데이터를 읽어오시겠습니까? (약 3~5초 소요)')) {
+                btn.classList.add('sync-loading');
+                btn.disabled = true;
+
+                try {
+                    const response = await fetch('/sync_data', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        alert('✅ ' + result.message);
+                        // 페이지 새로고침하여 최신 분석 결과 반영
+                        location.reload();
+                    } else {
+                        alert('❌ 동기화 실패: ' + result.error);
+                    }
+                } catch (error) {
+                    console.error('Sync Error:', error);
+                    alert('❌ 서버 연결 오류가 발생했습니다.');
+                } finally {
+                    btn.classList.remove('sync-loading');
+                    btn.disabled = false;
+                }
+            }
+        }
     </script>
 </body>
 

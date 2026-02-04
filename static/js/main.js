@@ -14,11 +14,19 @@ let userData = {
     law: {},
     rv: {},
     weights: {},
-    weights: {},
     benefit_rate: {},
-    contract: {}
+    contract: {},
+    finance: {}
 };
 let modifiedCells = new Set(); // Track modified cells
+
+// Comprehensive HTML string cleaner
+function cleanHtml(str) {
+    if (str === null || str === undefined) return '';
+    const temp = document.createElement('div');
+    temp.innerHTML = String(str);
+    return (temp.textContent || temp.innerText || "").trim();
+}
 
 async function initRvTable() {
     const tbody = document.getElementById('rv-table-body');
@@ -39,7 +47,7 @@ async function initRvTable() {
 
         types.forEach(type => {
             const row = document.createElement('tr');
-            row.innerHTML = `<td style="font-weight:600; text-align:left;">${type}</td>`;
+            row.innerHTML = `<td style="font-weight:600; text-align:left;">${cleanHtml(type)}</td>`;
             years.forEach(year => {
                 const td = document.createElement('td');
                 const input = document.createElement('input');
@@ -125,7 +133,7 @@ async function initWeightsTable() {
 
         types.forEach(type => {
             const row = document.createElement('tr');
-            row.innerHTML = `<td style="font-weight:600; text-align:left;">${type}</td>`;
+            row.innerHTML = `<td style="font-weight:600; text-align:left;">${cleanHtml(type)}</td>`;
             cols.forEach(col => {
                 const td = document.createElement('td');
                 const input = document.createElement('input');
@@ -291,6 +299,7 @@ function initAllDataTables() {
     else if (onclickStr.includes("'weights'")) initWeightsTable();
     else if (onclickStr.includes("'benefit-rate'")) initBenefitRateTable();
     else if (onclickStr.includes("'contract'")) initContractTable();
+    else if (onclickStr.includes("'finance'")) initFinanceTable();
 }
 
 const typeColors = {
@@ -2092,7 +2101,7 @@ function switchDataCategory(category, el) {
 
     // Update content visibility
     document.querySelectorAll('.data-category-content').forEach(content => content.classList.remove('active'));
-    const contentEl = document.getElementById(`data - ${category} `);
+    const contentEl = document.getElementById(`data-${category}`);
     if (contentEl) contentEl.classList.add('active');
 
     // Initialize the table for the selected category
@@ -2107,6 +2116,8 @@ function switchDataCategory(category, el) {
             case 'rv': initRvTable(); break;
             case 'weights': initWeightsTable(); break;
             case 'benefit-rate': initBenefitRateTable(); break;
+            case 'contract': initContractTable(); break;
+            case 'finance': initFinanceTable(); break;
         }
     } catch (err) {
         console.error(`Error loading category ${category}: `, err);
@@ -2131,10 +2142,10 @@ function renderInsightReport() {
     if (!insightBox || !summaryBox) return;
 
     insightBox.innerHTML = `
-    < div style = "background: rgba(99, 102, 241, 0.1); padding: 1.5rem; border-radius: 12px; border-left: 4px solid var(--accent-primary);" >
+        <div style="background: rgba(99, 102, 241, 0.1); padding: 1.5rem; border-radius: 12px; border-left: 4px solid var(--accent-primary);">
             <p><b>[${selectedYear}년 ${modelDisplayName} 전망 요약]</b></p>
             <p style="margin-top: 0.5rem;">선택하신 <b>${modelDisplayName}</b> 기준, 전체 평균 조정률은 <b>${parseFloat(avgVal).toFixed(2)}%</b>로 산출되었습니다.</p>
-        </div >
+        </div>
         <p style="margin-top: 1.5rem;">유형별로는 <b>${topGroup}</b>이 가장 높은 인상 압력을 받고 있으며, <b>${bottomGroup}</b>은 상대적으로 낮은 수준을 유지하고 있습니다.</p>
         <p style="margin-top: 1rem;">이 결과는 입력된 최신 기초자료와 선택된 분석 모성을 바탕으로 실시간 계산된 값입니다.</p>
 `;
@@ -2144,10 +2155,10 @@ function renderInsightReport() {
     mainGroups.forEach(g => {
         const val = cfSelected[g];
         summaryBox.innerHTML += `
-    < div style = "display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 12px; border: 1px solid var(--border-glass);" >
+            <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 12px; border: 1px solid var(--border-glass);">
                 <span style="font-weight: 500;">${g}</span>
                 <span style="font-weight: 800; font-size: 1.2rem; color: ${val >= 0 ? 'var(--success)' : 'var(--danger)'}">${parseFloat(val).toFixed(1)}%</span>
-            </div >
+            </div>
     `;
     });
 }
@@ -2176,7 +2187,7 @@ function setupColumnHighlight(tableId) {
         const colIndex = cell.cellIndex;
         if (colIndex === undefined || colIndex < 0) return;
 
-        table.querySelectorAll(`tr > *: nth - child(${colIndex + 1})`).forEach(el => {
+        table.querySelectorAll(`tr > *:nth-child(${colIndex + 1})`).forEach(el => {
             el.classList.add('col-highlight');
         });
     });
@@ -2248,7 +2259,7 @@ async function initMeiTable() {
 
         fields.forEach(field => {
             const row = document.createElement('tr');
-            row.innerHTML = `< td style = "white-space:nowrap; text-align:left; font-weight:600;" > ${field.label}</td > `;
+            row.innerHTML = `<td style="white-space:nowrap; text-align:left; font-weight:600;">${cleanHtml(field.label)}</td>`;
 
             years.forEach(year => {
                 const td = document.createElement('td');
@@ -2296,7 +2307,7 @@ async function initMeiTable() {
         setupTableNavigation('mei-table');
         setupColumnHighlight('mei-table');
     } catch (e) {
-        tbody.innerHTML = `< tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">데이터 로드 실패: ${e.message}</td></tr > `;
+        tbody.innerHTML = `<tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">데이터 로드 실패: ${e.message}</td></tr> `;
     }
 }
 
@@ -2458,7 +2469,7 @@ async function initMedicalTable() {
 
         types.forEach(type => {
             const row = document.createElement('tr');
-            row.innerHTML = `< td style = "font-weight:600; text-align:left;" > ${type}</td > `;
+            row.innerHTML = `<td style="font-weight:600; text-align:left;">${cleanHtml(type)}</td>`;
             years.forEach(year => {
                 const td = document.createElement('td');
                 const input = document.createElement('input');
@@ -2504,7 +2515,7 @@ async function initMedicalTable() {
         setupTableNavigation('medical-table');
         setupColumnHighlight('medical-table');
     } catch (e) {
-        tbody.innerHTML = `< tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">진료비 데이터 로드 실패: ${e.message}</td></tr > `;
+        tbody.innerHTML = `<tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">진료비 데이터 로드 실패: ${e.message}</td></tr> `;
     }
 }
 
@@ -2553,7 +2564,7 @@ async function initCfTable() {
 
         types.forEach(type => {
             const row = document.createElement('tr');
-            row.innerHTML = `< td style = "font-weight:600; text-align:left;" > ${type}</td > `;
+            row.innerHTML = `<td style="font-weight:600; text-align:left;">${cleanHtml(type)}</td>`;
             years.forEach(year => {
                 const td = document.createElement('td');
                 const input = document.createElement('input');
@@ -2598,7 +2609,7 @@ async function initCfTable() {
         setupTableNavigation('cf-table');
         setupColumnHighlight('cf-table');
     } catch (e) {
-        tbody.innerHTML = `< tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">환산지수 데이터 로드 실패: ${e.message}</td></tr > `;
+        tbody.innerHTML = `<tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">환산지수 데이터 로드 실패: ${e.message}</td></tr> `;
     }
 }
 
@@ -2647,7 +2658,7 @@ async function initPopTable() {
 
         items.forEach(item => {
             const row = document.createElement('tr');
-            row.innerHTML = `< td style = "font-weight:600; text-align:left;" > ${item.label}</td > `;
+            row.innerHTML = `<td style="font-weight:600; text-align:left;">${cleanHtml(item.label)}</td>`;
             years.forEach(year => {
                 const td = document.createElement('td');
                 const input = document.createElement('input');
@@ -2693,7 +2704,7 @@ async function initPopTable() {
         setupTableNavigation('pop-table');
         setupColumnHighlight('pop-table');
     } catch (e) {
-        tbody.innerHTML = `< tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">건보대상자 로드 실패: ${e.message}</td></tr > `;
+        tbody.innerHTML = `<tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">건보대상자 로드 실패: ${e.message}</td></tr> `;
     }
 }
 
@@ -2741,7 +2752,7 @@ async function initGdpTable() {
 
         items.forEach(item => {
             const row = document.createElement('tr');
-            row.innerHTML = `< td style = "font-weight:600; text-align:left;" > ${item.label}</td > `;
+            row.innerHTML = `<td style="font-weight:600; text-align:left;">${cleanHtml(item.label)}</td>`;
             years.forEach(year => {
                 const td = document.createElement('td');
                 const input = document.createElement('input');
@@ -2785,7 +2796,7 @@ async function initGdpTable() {
         setupTableNavigation('gdp-table');
         setupColumnHighlight('gdp-table');
     } catch (e) {
-        tbody.innerHTML = `< tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">GDP 로드 실패: ${e.message}</td></tr > `;
+        tbody.innerHTML = `<tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">GDP 로드 실패: ${e.message}</td></tr> `;
     }
 }
 
@@ -2834,7 +2845,7 @@ async function initLawTable() {
 
         types.forEach(type => {
             const row = document.createElement('tr');
-            row.innerHTML = `< td style = "font-weight:600; text-align:left;" > ${type}</td > `;
+            row.innerHTML = `<td style="font-weight:600; text-align:left;">${cleanHtml(type)}</td>`;
             years.forEach(year => {
                 const td = document.createElement('td');
                 const input = document.createElement('input');
@@ -2879,7 +2890,7 @@ async function initLawTable() {
         setupTableNavigation('law-table');
         setupColumnHighlight('law-table');
     } catch (e) {
-        tbody.innerHTML = `< tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">법자료 로드 실패: ${e.message}</td></tr > `;
+        tbody.innerHTML = `<tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">법자료 로드 실패: ${e.message}</td></tr> `;
     }
 }
 
@@ -2927,7 +2938,7 @@ async function initRvTable() {
 
         types.forEach(type => {
             const row = document.createElement('tr');
-            row.innerHTML = `< td style = "font-weight:600; text-align:left;" > ${type}</td > `;
+            row.innerHTML = `<td style = "font-weight:600; text-align:left;" > ${type}</td> `;
             years.forEach(year => {
                 const td = document.createElement('td');
                 const input = document.createElement('input');
@@ -2972,7 +2983,7 @@ async function initRvTable() {
         setupTableNavigation('rv-table');
         setupColumnHighlight('rv-table');
     } catch (e) {
-        tbody.innerHTML = `< tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">상대가치 로드 실패: ${e.message}</td></tr > `;
+        tbody.innerHTML = `<tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">상대가치 로드 실패: ${e.message}</td></tr> `;
     }
 }
 
@@ -3013,7 +3024,7 @@ async function initWeightsTable() {
 
     types.forEach(type => {
         const row = document.createElement('tr');
-        row.innerHTML = `< td > ${type}</td > `;
+        row.innerHTML = `<td style="font-weight:600; text-align:left;">${cleanHtml(type)}</td>`;
         cols.forEach(col => {
             const td = document.createElement('td');
             const input = document.createElement('input');
@@ -3087,7 +3098,7 @@ async function initBenefitRateTable() {
 
         types.forEach(type => {
             const row = document.createElement('tr');
-            row.innerHTML = `< td style = "font-weight:600; text-align:left;" > ${type}</td > `;
+            row.innerHTML = `<td style="font-weight:600; text-align:left;">${cleanHtml(type)}</td>`;
             years.forEach(year => {
                 const td = document.createElement('td');
                 const input = document.createElement('input');
@@ -3124,7 +3135,7 @@ async function initBenefitRateTable() {
         setupTableNavigation('benefit-rate-table');
         setupColumnHighlight('benefit-rate-table');
     } catch (e) {
-        tbody.innerHTML = `< tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">급여율 로드 실패: ${e.message}</td></tr > `;
+        tbody.innerHTML = `<tr > <td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">급여율 로드 실패: ${e.message}</td></tr> `;
     }
 }
 
@@ -3248,10 +3259,10 @@ background: var(--bg - surface);
 `;
 
     modalContent.innerHTML = `
-    < div style = "display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;" >
+    <div style = "display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;" >
             <h2 style="margin: 0; color: var(--accent-primary);">${title}</h2>
             <button onclick="closeModal()" style="background: var(--danger); color: white; border: none; padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; font-weight: 600;">✕ 닫기</button>
-        </div >
+        </div>
     <div style="overflow-x: auto;">
         ${content}
     </div>
@@ -3365,19 +3376,19 @@ function showMacroDetail(key, highlightYear) {
     if (key === 'g_s1' || key === 'g_s2') {
         title = key === 'g_s1' ? "1인당 실질 GDP 증가율 (S1)" : "1인당 실질 GDP 증가율 (S2: *0.8)";
         const variant = key === 'g_s1' ? 's1' : 's2';
-        content = `< div class="glass" style = "padding: 1rem; border-radius: 12px;" >
+        content = `<div class="glass" style = "padding: 1rem; border-radius: 12px;" >
     <table style="width: 100%; border-collapse: collapse;">
         <thead><tr>${years.map(y => `<th style="${getYearStyle(y)}">${y}년</th>`).join('')}</tr></thead>
         <tbody><tr>${years.map(y => `<td style="${getYearStyle(y)}">${formatVal(appData.bulk_sgr.gdp_growth[y]?.[variant] / 100 + 1)}</td>`).join('')}</tr>
             <tr style="font-size: 0.8rem; color: var(--text-secondary);">
                 ${years.map(y => `<td style="border: none; ${getYearStyle(y)}">(${formatVal(appData.bulk_sgr.gdp_growth[y]?.[variant], 2)}%)</td>`).join('')}
             </tr>
-        </tbody></table></div > `;
+        </tbody></table></div> `;
     }
     else if (key === 'p_s1' || key === 'p_s2') {
         title = key === 'p_s1' ? "건보대상 인구 증가율 (S1)" : "건보대상 인구 증가율 (S2: 고령화)";
         const variant = key === 'p_s1' ? 's1' : 's2';
-        content = `< div class="glass" style = "padding: 1rem; border-radius: 12px;" >
+        content = `<div class="glass" style = "padding: 1rem; border-radius: 12px;" >
     <table style="width: 100%; border-collapse: collapse;">
         <thead><tr>${years.map(y => `<th style="${getYearStyle(y)}">${y}년</th>`).join('')}</tr></thead>
         <tbody><tr>${years.map(y => {
@@ -3403,7 +3414,7 @@ function showMacroDetail(key, highlightYear) {
             return `<td style="border: none; ${getYearStyle(y)}">(${formatVal(rateVal, 3)}%)</td>`;
         }).join('')}
             </tr>
-        </tbody></table></div > `;
+        </tbody></table></div> `;
     }
     else if (key === 'l' || key === 'r') {
         title = key === 'l' ? "법제도 변화 지수 상세" : "환산지수 재평가(Reval) 지수 상세";
@@ -3412,7 +3423,7 @@ function showMacroDetail(key, highlightYear) {
 
         let rows = "";
         types.forEach(ht => {
-            rows += `< tr > <td style="font-weight: 700; text-align: left; background: rgba(255,255,255,0.03);">${ht}</td>`;
+            rows += `<tr > <td style="font-weight: 700; text-align: left; background: rgba(255,255,255,0.03);">${ht}</td>`;
             years.forEach(y => {
                 let val = dataMap[y]?.[ht] || 0;
                 let displayVal = 0;
@@ -3428,15 +3439,15 @@ function showMacroDetail(key, highlightYear) {
                     pctVal = val;
                 }
 
-                rows += `< td style = "${getYearStyle(y)}" > ${formatVal(displayVal)} <br><span style="font-size: 0.75rem; opacity: 0.7;">(${formatVal(pctVal, 2)}%)</span></td>`;
+                rows += `<td style = "${getYearStyle(y)}" > ${formatVal(displayVal)} <br><span style="font-size: 0.75rem; opacity: 0.7;">(${formatVal(pctVal, 2)}%)</span></td>`;
             });
-            rows += `</tr > `;
+            rows += `</tr> `;
         });
 
-        content = `< div style = "max-height: 60vh; overflow-y: auto;" >
+        content = `<div style = "max-height: 60vh; overflow-y: auto;" >
     <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
         <thead><tr><th style="position: sticky; top: 0; z-index: 10; background: var(--bg-surface);">구분</th>${years.map(y => `<th style="position: sticky; top: 0; z-index: 10; background: var(--bg-surface); ${getYearStyle(y)}">${y}년</th>`).join('')}</tr></thead>
-        <tbody>${rows}</tbody></table></div > `;
+        <tbody>${rows}</tbody></table></div> `;
     }
 
     showModal(title, content);
@@ -3542,7 +3553,7 @@ function expandChart(sourceChartId, title) {
         } catch (err) {
             console.error("Failed to initialize modal chart:", err);
             // Fallback: simple text if chart fails
-            canvas.parentElement.innerHTML += `< div style = "color:var(--danger); padding:2rem;" > 차트 로드 중 오류가 발생했습니다: ${err.message}</div > `;
+            canvas.parentElement.innerHTML += `<div style = "color:var(--danger); padding:2rem;" > 차트 로드 중 오류가 발생했습니다: ${err.message}</div> `;
         }
     }, 200); // 200ms is safer for transition overlap
 }
@@ -3577,7 +3588,7 @@ async function initContractTable() {
 
         years.forEach(year => {
             const row = document.createElement('tr');
-            row.innerHTML = `< td style = "font-weight:600;" > ${year}년</td > `;
+            row.innerHTML = `<td style = "font-weight:600;" > ${year}년</td> `;
 
             // 인상율_전체, 추가소요재정_전체
             ['인상율_전체', '추가소요재정_전체'].forEach(col => {
@@ -3625,7 +3636,7 @@ async function initContractTable() {
         });
         setupTableNavigation('contract-table');
     } catch (e) {
-        tbody.innerHTML = `< tr > <td colspan="3" style="text-align:center; padding: 2rem; color: var(--danger);">수가계약 데이터 로드 실패: ${e.message}</td></tr > `;
+        tbody.innerHTML = `<tr > <td colspan="3" style="text-align:center; padding: 2rem; color: var(--danger);">수가계약 데이터 로드 실패: ${e.message}</td></tr> `;
     }
 }
 
@@ -3826,4 +3837,125 @@ function renderAIAnalysis(serverResult = null, selectedYear = 2026) {
 
         logsEl.innerText = logText;
     }
+}
+
+// --- Finance Data (건보_재정통계) ---
+async function initFinanceTable() {
+    const tbody = document.getElementById('finance-table-body');
+    if (!tbody) return;
+
+    if (tbody.children.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="20" style="text-align:center; padding: 2rem;">데이터를 불러오는 중입니다...</td></tr>';
+    }
+
+    try {
+        const data = await fetchOriginalData();
+        tbody.innerHTML = '';
+
+        if (!data.finance) {
+            tbody.innerHTML = '<tr><td colspan="20" style="text-align:center; padding: 2rem;">재정 통계 자료가 없습니다.</td></tr>';
+            return;
+        }
+
+        // Get all columns from the first available year
+        const availableYears = Object.keys(data.finance);
+        if (availableYears.length === 0) return;
+
+        const firstYearData = data.finance[availableYears[0]];
+        const fields = Object.keys(firstYearData);
+        const years = DATA_YEARS;
+
+        updateTableHeader('finance-table', '항목');
+
+        fields.forEach(field => {
+            const row = document.createElement('tr');
+            row.innerHTML = `<td style="white-space:nowrap; text-align:left; font-weight:600;">${field}</td>`;
+
+            years.forEach(year => {
+                const td = document.createElement('td');
+                const input = document.createElement('input');
+                input.className = 'editable-input';
+                input.type = 'number';
+                input.step = '0.01';
+
+                const originalValue = data.finance[year]?.[field];
+                const userValue = userData.finance?.[year]?.[field];
+
+                const displayValue = userValue !== undefined ? userValue : originalValue;
+                input.value = (displayValue !== undefined && displayValue !== null) ? parseFloat(displayValue).toFixed(2) : '';
+                input.dataset.field = field;
+                input.dataset.year = year;
+                input.dataset.original = (originalValue !== undefined && originalValue !== null) ? parseFloat(originalValue).toFixed(2) : '';
+
+                if (parseInt(year) < 2022) {
+                    input.disabled = true;
+                    input.style.backgroundColor = 'rgba(255,255,255,0.05)';
+                    input.style.color = 'var(--text-secondary)';
+                    input.style.cursor = 'not-allowed';
+                }
+
+                if (userValue !== undefined && parseFloat(userValue) !== parseFloat(originalValue)) {
+                    td.classList.add('modified');
+                }
+
+                input.addEventListener('input', function () {
+                    if (this.value && parseFloat(this.value) !== parseFloat(this.dataset.original)) {
+                        td.classList.add('modified');
+                    } else {
+                        td.classList.remove('modified');
+                    }
+                });
+
+                td.appendChild(input);
+                row.appendChild(td);
+            });
+            tbody.appendChild(row);
+        });
+
+        setupTableNavigation('finance-table');
+        setupColumnHighlight('finance-table');
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="20" style="text-align:center; padding: 2rem; color: var(--danger);">재정통계 로드 실패: ${e.message}</td></tr>`;
+    }
+}
+
+function saveFinanceData() {
+    const tbody = document.getElementById('finance-table-body');
+    if (!tbody) return;
+
+    if (!userData.finance) userData.finance = {};
+
+    let savedCount = 0;
+    tbody.querySelectorAll('input').forEach(input => {
+        if (input.value) {
+            const year = input.dataset.year;
+            const field = input.dataset.field;
+            if (!userData.finance[year]) userData.finance[year] = {};
+            userData.finance[year][field] = parseFloat(input.value);
+            savedCount++;
+        }
+    });
+
+    showToast(`✅ 재정통계 데이터 ${savedCount}개 항목이 저장되었습니다.`);
+    initFinanceTable();
+    triggerGlobalSimulation();
+    saveAllToExcelFile('temp');
+}
+
+function resetFinanceData() {
+    if (!confirm('재정통계 수정을 취소하시겠습니까?')) return;
+    userData.finance = {};
+    initFinanceTable().then(() => {
+        showToast('✅ 원본 데이터로 복원되었습니다.', 'success');
+        triggerGlobalSimulation();
+    });
+}
+
+function resetContractData() {
+    if (!confirm('수가계약 수정을 취소하시겠습니까?')) return;
+    userData.contract = {};
+    initContractTable().then(() => {
+        showToast('✅ 원본 데이터로 복원되었습니다.', 'success');
+        triggerGlobalSimulation();
+    });
 }

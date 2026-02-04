@@ -1,7 +1,9 @@
 import pandas as pd
+import re
 import numpy as np
 import warnings
-from flask import Flask, render_template, request, send_file, jsonify, redirect, url_for
+from flask import Flask, render_template, request, send_file, jsonify, redirect, url_for, session
+from functools import wraps
 import io
 import os
 import datetime
@@ -16,18 +18,67 @@ except ImportError:
     print("[WARNING] AI optimizer module not available")
     AI_MODULE_AVAILABLE = False
 
+# [OPTIMIZATION] Simple Cache for Google Sheets data
+_gsheet_cache = None
+_gsheet_cache_time = None
+
 # 경고 무시 설정
 warnings.filterwarnings('ignore')
 
+# ----------------------------------------------------------------------
+# 0. Secrets Management (Streamlit Cloud Compatibility)
+# ----------------------------------------------------------------------
+def get_secret(key, default=None):
+    """
+    스트림릿 클라우드(환경 변수) 혹은 로컬(.streamlit/secrets.toml)에서 정보를 읽어옴
+    """
+    # 1. 환경 변수 확인 (스트림릿 클라우드용)
+    env_val = os.environ.get(key.replace('.', '_').upper())
+    if env_val: return env_val
+
+    # 2. 로컬 secrets.toml 확인 (로컬 개발용)
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        secrets_path = os.path.join(current_dir, '.streamlit', 'secrets.toml')
+        if os.path.exists(secrets_path):
+            with open(secrets_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                # 간단한 TOML 파싱 (섹션 및 키-값)
+                current_section = None
+                lines = content.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line or line.startswith('#'): continue
+                    if line.startswith('[') and line.endswith(']'):
+                        current_section = line[1:-1]
+                        continue
+                    if '=' in line:
+                        k, v = [x.strip() for x in line.split('=', 1)]
+                        # 따옴표 제거
+                        v = v.strip('"\'')
+                        full_key = f"{current_section}.{k}" if current_section else k
+                        if full_key == key:
+                            return v
+    except Exception as e:
+        print(f"[WARN] Secrets loading failed: {e}")
+    
+    return default
+
 def sanitize_data(data):
-    """JSON 직렬화 가능하도록 데이터 정제 (NaN/Inf -> None)"""
+    """JSON 직렬화 가능하도록 데이터 정제 (NaN/Inf -> None, HTML 정제)"""
+    import re
     if isinstance(data, dict):
-        return {k: sanitize_data(v) for k, v in data.items()}
+        return {str(k): sanitize_data(v) for k, v in data.items()}
     elif isinstance(data, list):
         return [sanitize_data(v) for v in data]
     elif isinstance(data, float):
-        if np.isnan(data) or np.isinf(data):
-            return None
+        if np.isnan(data) or np.isinf(data): return None
+        return float(data)
+    elif isinstance(data, str):
+        # Extremely aggressive HTML stripping
+        return re.sub(r'<[^>]*>', '', data).strip()
+    elif hasattr(data, 'tolist'): # Handle numpy arrays
+        return sanitize_data(data.tolist())
     return data
 
 # ----------------------------------------------------------------------
@@ -46,81 +97,9 @@ class DataProcessor:
 
     def _load_sheet(self, sheet_name, index_col=0, filter_years=False):
         try:
-            # Load data without setting index initially to find potential 'Time'/'Year' columns securely
-            df = pd.read_excel(self.file_path, sheet_name=sheet_name, index_col=None)
-            
-            # Set Index Logic
-            if filter_years:
-                # Priority: '연도' column -> 'Year' column -> 1st column
-                target_col = None
-                if '연도' in df.columns:
-                    target_col = '연도'
-                elif 'Year' in df.columns:
-                    target_col = 'Year'
-                else:
-                    target_col = df.columns[0]
-                
-                df = df.set_index(target_col)
-                
-                # Robust filtering for Years
-                # Force index to numeric, turn errors to NaN
-                df.index = pd.to_numeric(df.index, errors='coerce')
-                # Drop rows where index is NaN (e.g. string headers, empty rows)
-                df = df[df.index.notna()]
-                # Convert to integer and filter
-                df.index = df.index.astype(int)
-                df = df[df.index > 1990]
-            else:
-                # For non-time-series (like weights), use standard index_col=0 behavior
-                if not df.empty and len(df.columns) > 0:
-                     df = df.set_index(df.columns[0])
-
-            # Clean columns and index to prevent whitespace issues
-            df.columns = [str(c).strip() for c in df.columns]
-            if df.index.dtype == 'object':
-                df.index = [str(i).strip() if isinstance(i, str) else i for i in df.index]
-
-            return df.apply(pd.to_numeric, errors='coerce')
-        except Exception as e:
-            print(f"Sheet {sheet_name} load warning: {e}")
-            return pd.DataFrame()
-
-    def _load_data(self):
-        try:
-            if not os.path.exists(self.file_path):
-                 raise FileNotFoundError(f"File not found: {self.file_path}")
-
-            # [OPTIMIZATION] Use pd.ExcelFile to read workbook once
-            with pd.ExcelFile(self.file_path) as xls:
-                new_data = {
-                    'df_expenditure': self._load_sheet_from_xls(xls, 'expenditure_real', filter_years=True),
-                    'df_weights': self._load_sheet_from_xls(xls, 'cost_structure').T,
-                    'df_raw_mei_inf': self._load_sheet_from_xls(xls, 'factor_pd', filter_years=True),
-                    'df_gdp': self._load_sheet_from_xls(xls, 'GDP', filter_years=True),
-                    'df_pop': self._load_sheet_from_xls(xls, 'pop', filter_years=True),
-                    'df_sgr_reval': self._load_sheet_from_xls(xls, 'cf_t', filter_years=True),
-                    'df_sgr_law': self._load_sheet_from_xls(xls, 'law', filter_years=True),
-                    'df_rel_value': self._load_sheet_from_xls(xls, 'rvs', filter_years=True),
-                    'df_num': self._load_sheet_from_xls(xls, 'num', filter_years=True),
-                    'df_contract': self._load_sheet_from_xls(xls, 'contract', filter_years=True),
-                    'df_finance': self._load_sheet_from_xls(xls, 'finance', filter_years=True),
-                    'df_rate_py': self._load_sheet_from_xls(xls, 'rate_py', filter_years=True) if 'rate_py' in xls.sheet_names else self._load_sheet_from_xls(xls, 'Sheet1', filter_years=True)
-                }
-            
-            if new_data['df_expenditure'].empty:
-                raise ValueError("Critical Validation Error: 'expenditure_real' sheet is empty or failed to load.")
-            
-            return new_data
-        except Exception as e:
-            print(f"❌ 데이터 로드 치명적 오류: {e}")
-            raise e
-
-    def _load_sheet_from_xls(self, xls, sheet_name, index_col=0, filter_years=False):
-        try:
-            if sheet_name not in xls.sheet_names:
-                return pd.DataFrame()
-                
-            df = pd.read_excel(xls, sheet_name=sheet_name, index_col=None)
+            sheet_id = get_secret('google_sheets.sheet_id', '1UNahJhA6bSOJMahQJWFCJzUV33VvjVNafmu2lHRb-sM')
+            xlsx_url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx'
+            df = pd.read_excel(xlsx_url, sheet_name=sheet_name, index_col=None)
             
             if filter_years:
                 target_col = None
@@ -146,11 +125,86 @@ class DataProcessor:
             print(f"Sheet {sheet_name} load warning: {e}")
             return pd.DataFrame()
 
+    def _load_data(self, force=False):
+        global _gsheet_cache, _gsheet_cache_time
+        now = datetime.datetime.now()
+        if not force and _gsheet_cache and _gsheet_cache_time and (now - _gsheet_cache_time).seconds < 300:
+            return _gsheet_cache
+
+        try:
+            sheet_id = get_secret('google_sheets.sheet_id', '1UNahJhA6bSOJMahQJWFCJzUV33VvjVNafmu2lHRb-sM')
+            gsheet_url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx'
+            # 우선순위: 구글 시트 URL (사용자 요청: 구글 시트 최신 데이터 반영)
+            source = gsheet_url
+            print(f"[INFO] Loading data from: {source}")
+            with pd.ExcelFile(source) as xls:
+                new_data = {
+                    'df_expenditure': self._load_sheet_from_xls(xls, 'expenditure_real', filter_years=True),
+                    'df_weights': self._load_sheet_from_xls(xls, 'cost_structure').T,
+                    'df_raw_mei_inf': self._load_sheet_from_xls(xls, 'factor_pd', filter_years=True),
+                    'df_gdp': self._load_sheet_from_xls(xls, 'GDP', filter_years=True),
+                    'df_pop': self._load_sheet_from_xls(xls, 'pop', filter_years=True),
+                    'df_sgr_reval': self._load_sheet_from_xls(xls, 'cf_t', filter_years=True),
+                    'df_sgr_law': self._load_sheet_from_xls(xls, 'law', filter_years=True),
+                    'df_rel_value': self._load_sheet_from_xls(xls, 'rvs', filter_years=True),
+                    'df_num': self._load_sheet_from_xls(xls, 'num', filter_years=True),
+                    'df_contract': self._load_sheet_from_xls(xls, 'contract', filter_years=True),
+                    'df_finance': self._load_sheet_from_xls(xls, 'finance', filter_years=True),
+                    'df_rate_py': self._load_sheet_from_xls(xls, 'rate_py', filter_years=True) if 'rate_py' in xls.sheet_names else self._load_sheet_from_xls(xls, 'Sheet1', filter_years=True)
+                }
+            _gsheet_cache = new_data
+            _gsheet_cache_time = now
+            return new_data
+        except Exception as e:
+            print(f"❌ 데이터 로드 치명적 오류: {e}")
+            return {k: pd.DataFrame() for k in ['df_expenditure','df_weights','df_raw_mei_inf','df_gdp','df_pop','df_sgr_reval','df_sgr_law','df_rel_value','df_num','df_contract','df_finance','df_rate_py']}
+
+    def _load_sheet_from_xls(self, xls, sheet_name, index_col=0, filter_years=False):
+        try:
+            if sheet_name not in xls.sheet_names: return pd.DataFrame()
+            # Explicitly using engine='openpyxl' is already handled by ExcelFile if it's .xlsx
+            df = pd.read_excel(xls, sheet_name=sheet_name, index_col=None)
+            
+            # Global Cleaning Helper
+            import re
+            def clean_str(v):
+                if not isinstance(v, str): return v
+                # Remove all HTML tags and strip
+                cleaned = re.sub(r'<[^>]*>', '', v).strip()
+                # Fix encoding artifacts if any (e.g. )
+                return cleaned.encode('utf-8', 'ignore').decode('utf-8')
+
+            if filter_years:
+                target_col = None
+                for c in ['연도', 'Year', 'year']:
+                    if c in df.columns: 
+                        target_col = c
+                        break
+                if not target_col: target_col = df.columns[0]
+                
+                df = df.set_index(target_col)
+                df.index = pd.to_numeric(df.index, errors='coerce')
+                df = df[df.index.notna()]
+                df.index = df.index.astype(int)
+            else:
+                if not df.empty and len(df.columns) > 0:
+                     df = df.set_index(df.columns[0])
+
+            # Apply cleaning to all headers
+            df.columns = [clean_str(c) for c in df.columns]
+            if df.index.dtype == 'object':
+                df.index = [clean_str(i) for i in df.index]
+
+            return df.apply(pd.to_numeric, errors='coerce')
+        except Exception as e:
+            print(f"Sheet {sheet_name} load warning: {e}")
+            return pd.DataFrame()
+
     def reload_data(self):
         """Force reload data from Excel file (SAFE RELOAD)"""
         print(f"[INFO] Reloading data from {self.file_path}...")
         try:
-            temp_data = self._load_data()
+            temp_data = self._load_data(force=True)
             self.raw_data = temp_data
             print("[SUCCESS] Data reloaded successfully.")
             return True
@@ -1405,14 +1459,63 @@ class CalculationEngine:
 # ----------------------------------------------------------------------
 
 app = Flask(__name__)
+app.secret_key = get_secret('flask.secret_key', 'sgr_analytics_secret_safe_key') # 보안을 위한 시크릿 키
+
+# 로그인 확인 데코레이터
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/login')
+def login():
+    """로그인 페이지 (Firebase 설정을 동적으로 주입)"""
+    firebase_config = {
+        "apiKey": get_secret("firebase.apiKey"),
+        "authDomain": get_secret("firebase.authDomain"),
+        "projectId": get_secret("firebase.projectId"),
+        "storageBucket": get_secret("firebase.storageBucket"),
+        "messagingSenderId": get_secret("firebase.messagingSenderId"),
+        "appId": get_secret("firebase.appId"),
+        "measurementId": get_secret("firebase.measurementId")
+    }
+    return render_template('login.html', firebase_config=firebase_config)
+
+@app.route('/logout')
+def logout():
+    """로그아웃"""
+    session.pop('user', None)
+    return redirect(url_for('login'))
+
+@app.route('/set_session', methods=['POST'])
+def set_session():
+    """프론트엔드에서 파이어베이스 로그인 성공 시 세션 설정"""
+    data = request.json
+    token = data.get('token')
+    email = data.get('email')
+    
+    # 이메일 화이트리스트 검종
+    if email == 'fapitta1346@gmail.com':
+        session['user'] = email
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': 'Unauthorized email'}), 403
+
 processor = DataProcessor('SGR_data.xlsx')
 
 # 전역 캐시 변수 - 초기 로딩 시간 단축
 _cached_analysis = None
 
-def get_cached_analysis():
+def get_cached_analysis(force_reload=False):
     """캐시된 분석 결과를 반환하거나 새로 계산"""
     global _cached_analysis
+    
+    if force_reload:
+        print("[INFO] 강제 데이터 새로고침 실행 중...")
+        processor.reload_data()
+        _cached_analysis = None
     
     if _cached_analysis is None:
         print("[INFO] 초기 분석 실행 중...")
@@ -1478,33 +1581,35 @@ def sanitize_data(obj):
         return float(obj)
     elif hasattr(obj, 'to_dict'):
         return sanitize_data(obj.to_dict())
+    elif isinstance(obj, str):
+        # [USER REQUEST] Clean HTML tags
+        return re.sub(r'<[^>]+>', '', obj)
     return obj
 
 @app.route('/')
 def landing_redirect():
     """Redirect to main application (skipping landing page as requested)"""
+    if 'user' not in session:
+        return redirect(url_for('login'))
     return redirect(url_for('index'))
 
 @app.route('/ai')
+@login_required
 def ai_dashboard():
     """AI 최적화 대시보드 페이지"""
     return render_template('ai_dashboard.html')
 
 @app.route('/app')
+@login_required
 def index():
     """Main application page - Runs analysis on first dashboard load"""
     selected_model = request.args.get('model', 'SGR_S2')
     tab = request.args.get('tab', 'dashboard')
     
     if tab == 'dashboard':
-        # 대시보드 탭: 캐시된 분석 결과가 있으면 사용, 없으면 분석 실행
+        # 대시보드 탭: 서버 측 캐시 활용 (사용량 절감)
         global _cached_analysis
-        if _cached_analysis is None:
-            # 최초 로딩 시 분석 실행 (이후에는 캐시 사용)
-            print("[INFO] 대시보드 최초 로딩 - 분석 실행 중...")
-            _cached_analysis = get_cached_analysis()
-            print("[SUCCESS] 대시보드 분석 완료!")
-        
+        _cached_analysis = get_cached_analysis(force_reload=False)
         analysis_data = _cached_analysis.copy()
     else:
         # 입력 탭: 원시 데이터만 필요 (빠른 로딩)
@@ -1525,6 +1630,7 @@ def index():
     return render_template('index.html', analysis_data=analysis_data)
 
 @app.route('/simulate', methods=['POST'])
+@login_required
 def simulate():
     overrides = request.json
     engine = CalculationEngine(processor.raw_data, overrides)
@@ -1551,6 +1657,7 @@ def simulate():
     return jsonify(sanitize_data(response_data))
 
 @app.route('/run_analysis', methods=['POST'])
+@login_required
 def run_analysis():
     """[NEW] 분석 실행 엔드포인트 - 사용자가 버튼을 클릭할 때만 실행"""
     try:
@@ -1591,7 +1698,35 @@ def run_analysis():
         }), 500
 
 
+@app.route('/sync_data', methods=['POST'])
+@login_required
+def sync_data():
+    """사용자가 버튼을 눌러 구글 시트 데이터를 수동으로 갱신하는 엔드포인트"""
+    try:
+        print("[INFO] 구글 시트 데이터 수동 동기화 시작...")
+        global _cached_analysis
+        
+        # 1. 프로세서에서 구글 시트 데이터 강제 새로고침
+        processor.reload_data()
+        
+        # 2. 전역 분석 캐시 무효화 및 강제 재산출
+        _cached_analysis = get_cached_analysis(force_reload=True)
+        
+        print("[SUCCESS] 수동 동기화 완료!")
+        return jsonify({
+            'success': True,
+            'message': '구글 시트의 최신 데이터를 가져왔으며 분석 결과가 갱신되었습니다.'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @app.route('/save_to_excel_file', methods=['POST'])
+@login_required
 def save_to_excel_file():
     data = request.json
     overrides = data.get('overrides', data)
@@ -1608,6 +1743,7 @@ def save_to_excel_file():
         return jsonify({'success': False, 'error': msg})
 
 @app.route('/download_ar/<int:year>/<string:model_type>')
+@login_required
 def download_ar(year, model_type):
     """AR 모형 시나리오 분석 결과를 엑셀로 내보내기"""
     analysis = get_cached_analysis()
@@ -1908,34 +2044,30 @@ def get_original_data():
                     else:
                         rate_data[htype][str(year)] = None
 
-        return jsonify({
-            'mei': mei_data,
-            'medical': medical_data,
-            'cf': cf_data,
-            'population': pop_data,
-            'gdp': gdp_data,
-            'law': law_data,
-            'rv': rv_data,
-            'weights': weights_data,
-            'benefit_rate': rate_data,
-            'contract': {} # Placeholder until populated
-        })
-
         # [NEW] 수가계약 (Contract)
         contract_data = {}
         df_contract = processor.raw_data.get('df_contract', pd.DataFrame())
-        
         if not df_contract.empty:
             for year in years:
                 contract_data[str(year)] = {}
                 if year in df_contract.index:
-                    # User requested '수가인상율_전체' (mapped to '인상율_전체') and '추가소요재정_전체'
                     for col in ['인상율_전체', '추가소요재정_전체']:
                         if col in df_contract.columns:
                             val = df_contract.loc[year, col]
                             contract_data[str(year)][col] = clean_val(val)
                         else:
-                             contract_data[str(year)][col] = None
+                            contract_data[str(year)][col] = None
+
+        # [NEW] 건보 재정통계 (Finance)
+        finance_data = {}
+        df_finance = processor.raw_data.get('df_finance', pd.DataFrame())
+        if not df_finance.empty:
+            for year in years:
+                finance_data[str(year)] = {}
+                if year in df_finance.index:
+                    for col in df_finance.columns:
+                        val = df_finance.loc[year, col]
+                        finance_data[str(year)][col] = clean_val(val)
 
         return jsonify({
             'mei': mei_data,
@@ -1947,7 +2079,8 @@ def get_original_data():
             'rv': rv_data,
             'weights': weights_data,
             'benefit_rate': rate_data,
-            'contract': contract_data
+            'contract': contract_data,
+            'finance': finance_data
         })
     except Exception as e:
         import traceback
@@ -1956,6 +2089,7 @@ def get_original_data():
 
 
 @app.route('/get_excel_raw_data')
+@login_required
 def get_excel_raw_data():
     """메모리에 로드된 데이터를 반환"""
     try:
@@ -2096,6 +2230,7 @@ def api_ai_optimization():
 
 
 @app.route('/api/ai_full_report', methods=['POST'])
+@login_required
 def api_ai_full_report():
     """AI 전체 분석 리포트 반환 (S1 MEI-평균 기준 연동)"""
     if not AI_MODULE_AVAILABLE:

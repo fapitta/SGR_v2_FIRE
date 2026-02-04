@@ -1,0 +1,27 @@
+# Python Caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+.streamlit/
+
+# Data Files (Local Excel copies)
+# Note: Keep SGR_data.xlsx if it's the primary reference, but ignore temp copies
+SGR_data_임시_*.xlsx
+~$*.xlsx
+
+# Diagnostic/Log files
+log.txt
+output.txt
+server_log.txt
+diagnose_env.py
+
+# OS Files
+.DS_Store
+Thumbs.db
