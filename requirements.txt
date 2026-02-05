@@ -1,6 +1,8 @@
+streamlit
 Flask
 pandas
 numpy
 scipy
 openpyxl
 requests
+firebase-admin

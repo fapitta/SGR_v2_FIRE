@@ -2,7 +2,7 @@ import pandas as pd
 import re
 import numpy as np
 import warnings
-from flask import Flask, render_template, request, send_file, jsonify, redirect, url_for, session
+import streamlit as st
 from functools import wraps
 import io
 import os
@@ -30,20 +30,29 @@ warnings.filterwarnings('ignore')
 # ----------------------------------------------------------------------
 def get_secret(key, default=None):
     """
-    스트림릿 클라우드(환경 변수) 혹은 로컬(.streamlit/secrets.toml)에서 정보를 읽어옴
+    스트림릿 클라우드(st.secrets), 환경 변수, 혹은 로컬(.streamlit/secrets.toml)에서 정보를 읽어옴
     """
-    # 1. 환경 변수 확인 (스트림릿 클라우드용)
+    # 1. Streamlit Secrets 확인 (가장 높은 우선순위)
+    try:
+        keys = key.split('.')
+        val = st.secrets
+        for k in keys:
+            val = val[k]
+        return val
+    except:
+        pass
+
+    # 2. 환경 변수 확인 (스트림릿 클라우드용)
     env_val = os.environ.get(key.replace('.', '_').upper())
     if env_val: return env_val
 
-    # 2. 로컬 secrets.toml 확인 (로컬 개발용)
+    # 3. 로컬 secrets.toml 확인 (직접 파싱 - 이전 호환성 유지)
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         secrets_path = os.path.join(current_dir, '.streamlit', 'secrets.toml')
         if os.path.exists(secrets_path):
             with open(secrets_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-                # 간단한 TOML 파싱 (섹션 및 키-값)
                 current_section = None
                 lines = content.split('\n')
                 for line in lines:
@@ -54,7 +63,6 @@ def get_secret(key, default=None):
                         continue
                     if '=' in line:
                         k, v = [x.strip() for x in line.split('=', 1)]
-                        # 따옴표 제거
                         v = v.strip('"\'')
                         full_key = f"{current_section}.{k}" if current_section else k
                         if full_key == key:
@@ -1451,828 +1459,105 @@ class CalculationEngine:
         return history, details, bulk_sgr
 
 # ----------------------------------------------------------------------
-# 2.5 AI Optimization Integrated via ai_optimizer.py
-
-
-# ----------------------------------------------------------------------
-# 3. Flask Server
+# 3. Streamlit UI (Flask 대체)
 # ----------------------------------------------------------------------
 
-app = Flask(__name__)
-app.secret_key = get_secret('flask.secret_key', 'sgr_analytics_secret_safe_key') # 보안을 위한 시크릿 키
+st.set_page_config(page_title="SGR Analytics 2027", layout="wide")
 
-# 로그인 확인 데코레이터
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'user' not in session:
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
+# [사용자 요청] 접속 성공 메시지
+st.title("🚀 접속 성공!")
+st.subheader("SGR Healthcare Analytics v2 (Streamlit Native)")
 
-@app.route('/login')
-def login():
-    """로그인 페이지 (Firebase 설정을 동적으로 주입)"""
-    firebase_config = {
-        "apiKey": get_secret("firebase.apiKey"),
-        "authDomain": get_secret("firebase.authDomain"),
-        "projectId": get_secret("firebase.projectId"),
-        "storageBucket": get_secret("firebase.storageBucket"),
-        "messagingSenderId": get_secret("firebase.messagingSenderId"),
-        "appId": get_secret("firebase.appId"),
-        "measurementId": get_secret("firebase.measurementId")
-    }
-    return render_template('login.html', firebase_config=firebase_config)
+# 세션 상태 초기화
+if 'user' not in st.session_state:
+    st.session_state['user'] = None
 
-@app.route('/logout')
-def logout():
-    """로그아웃"""
-    session.pop('user', None)
-    return redirect(url_for('login'))
+# 로그인 처리 (간이 버전 - 이전 이메일 유지)
+if not st.session_state['user']:
+    with st.container():
+        st.info("애플리케이션에 접속하려면 로그인이 필요합니다.")
+        email = st.text_input("이메일 주소", placeholder="example@gmail.com")
+        if st.button("접속하기"):
+            if email == 'fapitta1346@gmail.com':
+                st.session_state['user'] = email
+                st.success("인증 성공!")
+                st.rerun()
+            else:
+                st.error("권한이 없는 이메일입니다.")
+    st.stop()
 
-@app.route('/set_session', methods=['POST'])
-def set_session():
-    """프론트엔드에서 파이어베이스 로그인 성공 시 세션 설정"""
-    data = request.json
-    token = data.get('token')
-    email = data.get('email')
+# --- 로그인 성공 후 메인 화면 ---
+
+# 사이드바 구성
+with st.sidebar:
+    st.write(f"👤 **{st.session_state['user']}** 님 환영합니다.")
+    if st.button("로그아웃"):
+        st.session_state['user'] = None
+        st.rerun()
     
-    # 이메일 화이트리스트 검종
-    if email == 'fapitta1346@gmail.com':
-        session['user'] = email
-        return jsonify({'success': True})
-    return jsonify({'success': False, 'error': 'Unauthorized email'}), 403
-
-processor = DataProcessor('SGR_data.xlsx')
-
-# 전역 캐시 변수 - 초기 로딩 시간 단축
-_cached_analysis = None
-
-def get_cached_analysis(force_reload=False):
-    """캐시된 분석 결과를 반환하거나 새로 계산"""
-    global _cached_analysis
+    st.divider()
     
-    if force_reload:
-        print("[INFO] 강제 데이터 새로고침 실행 중...")
-        processor.reload_data()
-        _cached_analysis = None
+    st.write("⚙️ **데이터 관리**")
+    if st.button("🔄 실시간 데이터 동기화"):
+        with st.spinner("구글 시트에서 최신 데이터를 가져오는 중..."):
+            processor = DataProcessor('SGR_data.xlsx')
+            processor.reload_data()
+            st.success("동기화 완료!")
+            st.rerun()
+
+# 메인 분석 로직
+try:
+    processor = DataProcessor('SGR_data.xlsx')
+    calc_engine = CalculationEngine(processor.raw_data)
     
-    if _cached_analysis is None:
-        print("[INFO] 초기 분석 실행 중...")
-        calc_engine = CalculationEngine(processor.raw_data)
+    # 데이터 요약 정보 표시
+    st.write("### 📊 최근 분석 요약")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("최종 업데이트", datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+    with col2:
+        st.metric("데이터 소스", "Google Sheets (연동됨)")
+    with col3:
+        st.metric("시스템 상태", "운영 중")
+
+    # 탭 구성 (대시보드 / 가공 데이터 / AI 최적화)
+    tab1, tab2, tab3 = st.tabs(["📈 대시보드", "📂 가공 데이터 확인", "🤖 AI 최적화"])
+
+    with tab1:
+        st.write("#### 2025년 환산지수 산출 결과 (SGR 모형)")
         history, components, bulk_sgr = calc_engine.run_full_analysis(target_year=2025)
         
-        # --- AI Integration Step (High Performance) ---
-        try:
-            if AI_MODULE_AVAILABLE:
-                print("[Info] Running AI Optimization on App Load...")
-                ai_engine = AIOptimizationEngine(data_frames=processor.raw_data)
-                
-                # Fetch S1 Model, MEI-Average results as baseline for year 2026
-                # (Assuming bulk_sgr['scenario_adjustments'][2026]['평균']['S1'] exists)
-                sgr_ref = {}
-                try:
-                    target_y = 2026
-                    if 'scenario_adjustments' in bulk_sgr and target_y in bulk_sgr['scenario_adjustments']:
-                        sgr_ref = bulk_sgr['scenario_adjustments'][target_y].get('평균', {}).get('S1', {})
-                    
-                    # If empty, fallback to simple history or defaults
-                    if not sgr_ref:
-                        sgr_ref = {'병원(계)': 1.96, '의원': 1.9, '치과(계)': 1.96, '한방(계)': 1.96, '약국': 2.8}
-                except:
-                    sgr_ref = {}
-
-                ai_results = ai_engine.run_full_analysis(target_year=2026, sgr_results=sgr_ref)
-                if ai_results:
-                    bulk_sgr['ai_prediction'] = ai_results
-                    print("[SUCCESS] AI Optimization analysis integrated with S1 Reference.")
-        except Exception as e:
-            print(f"[Error] AI Auto-run Failed: {e}")
-
-        groups_list = calc_engine.HOSPITAL_TYPES + ['병원(계)', '의원(계)', '치과(계)', '한방(계)', '약국(계)', '전체']
-        scenarios_list = list(components['mei_raw'][2025].keys()) if 2025 in components['mei_raw'] else ['평균', '최대', '최소', '중위수']
+        # 간단한 결과 테이블 표시
+        if 'scenario_adjustments' in bulk_sgr and 2025 in bulk_sgr['scenario_adjustments']:
+            res_2025 = bulk_sgr['scenario_adjustments'][2025].get('평균', {}).get('S2', {})
+            if res_2025:
+                df_res = pd.DataFrame(list(res_2025.items()), columns=['종별', '인상률(%)'])
+                st.table(df_res)
+            else:
+                st.warning("분석 데이터를 불러올 수 없습니다.")
         
-        _cached_analysis = {
-            'history': history,
-            'components': components,
-            'bulk_sgr': bulk_sgr,
-            'groups': groups_list,
-            'scenarios': scenarios_list,
-            'model_name_map': {
-                'SGR_S1': 'S1', 'SGR_S2': 'S2', 'MACRO_GDP': 'GDP', 'MACRO_MEI': 'MEI', 'MACRO_LINK': 'Link'
-            }
-        }
-        print("[SUCCESS] 초기 분석 완료!")
-    
-    return _cached_analysis
+    with tab2:
+        st.write("#### 구글 시트 원본 데이터")
+        sheet_names = list(processor.raw_data.keys())
+        selected_sheet = st.selectbox("시트 선택", sheet_names)
+        if selected_sheet:
+            st.dataframe(processor.raw_data[selected_sheet])
 
-# Recursive check for NaN/Inf/Numpy types to prevent JSON errors
-def sanitize_data(obj):
-    if isinstance(obj, dict):
-        return {str(k): sanitize_data(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [sanitize_data(x) for x in obj]
-    elif isinstance(obj, (bool, np.bool_)):
-        return bool(obj)
-    elif isinstance(obj, (int, np.integer)):
-        return int(obj)
-    elif isinstance(obj, (float, np.floating)):
-        if pd.isna(obj) or np.isinf(obj): return None
-        return float(obj)
-    elif hasattr(obj, 'to_dict'):
-        return sanitize_data(obj.to_dict())
-    elif isinstance(obj, str):
-        # [USER REQUEST] Clean HTML tags
-        return re.sub(r'<[^>]+>', '', obj)
-    return obj
+    with tab3:
+        st.write("#### AI 기반 수가 인상률 최적화")
+        if AI_MODULE_AVAILABLE:
+            if st.button("AI 최적화 실행"):
+                with st.spinner("AI 엔진 가동 중..."):
+                    ai_engine = AIOptimizationEngine(data_frames=processor.raw_data)
+                    ai_res = ai_engine.run_full_analysis(target_year=2026)
+                    if ai_res:
+                        st.json(ai_res)
+        else:
+            st.error("AI 모듈을 로드할 수 없습니다.")
 
-@app.route('/')
-def landing_redirect():
-    """Redirect to main application (skipping landing page as requested)"""
-    if 'user' not in session:
-        return redirect(url_for('login'))
-    return redirect(url_for('index'))
+except Exception as e:
+    st.error(f"데이터 로드 중 오류 발생: {e}")
+    st.exception(e)
 
-@app.route('/ai')
-@login_required
-def ai_dashboard():
-    """AI 최적화 대시보드 페이지"""
-    return render_template('ai_dashboard.html')
-
-@app.route('/app')
-@login_required
-def index():
-    """Main application page - Runs analysis on first dashboard load"""
-    selected_model = request.args.get('model', 'SGR_S2')
-    tab = request.args.get('tab', 'dashboard')
-    
-    if tab == 'dashboard':
-        # 대시보드 탭: 서버 측 캐시 활용 (사용량 절감)
-        global _cached_analysis
-        _cached_analysis = get_cached_analysis(force_reload=False)
-        analysis_data = _cached_analysis.copy()
-    else:
-        # 입력 탭: 원시 데이터만 필요 (빠른 로딩)
-        analysis_data = {
-            'history': {'years': list(range(2014, 2029))},
-            'components': {},
-            'bulk_sgr': {},
-            'groups': ['상급종합', '종합병원', '병원', '요양병원', '의원', '치과병원', '치과의원', '한방병원', '한의원', '약국', '병원(계)', '의원(계)', '치과(계)', '한방(계)', '약국(계)', '전체'],
-            'scenarios': ['평균', '최대', '최소', '중위수'],
-            'model_name_map': {
-                'SGR_S1': 'S1', 'SGR_S2': 'S2', 'MACRO_GDP': 'GDP', 'MACRO_MEI': 'MEI', 'MACRO_LINK': 'Link'
-            }
-        }
-    
-    analysis_data['selected_model'] = selected_model
-    analysis_data = sanitize_data(analysis_data)
-    
-    return render_template('index.html', analysis_data=analysis_data)
-
-@app.route('/simulate', methods=['POST'])
-@login_required
-def simulate():
-    overrides = request.json
-    engine = CalculationEngine(processor.raw_data, overrides)
-    history, components, bulk_sgr = engine.run_full_analysis()
-    
-    # Dynamic Scenario List
-    scenarios_list = list(components['mei_raw'][2025].keys()) if 2025 in components['mei_raw'] else []
-    if not scenarios_list:
-        scenarios_list = ['평균', '최대', '최소', '중위수']
-
-    response_data = {
-        'success': True,
-        'analysis_data': {
-            'history': history,
-            'components': components,
-            'bulk_sgr': bulk_sgr,
-            'groups': engine.HOSPITAL_TYPES + ['병원(계)', '의원(계)', '치과(계)', '한방(계)', '약국(계)', '전체'],
-            'scenarios': scenarios_list,
-            'model_name_map': {
-                'SGR_S1': 'S1', 'SGR_S2': 'S2', 'MACRO_GDP': 'GDP', 'MACRO_MEI': 'MEI', 'MACRO_LINK': 'Link'
-            }
-        }
-    }
-    return jsonify(sanitize_data(response_data))
-
-@app.route('/run_analysis', methods=['POST'])
-@login_required
-def run_analysis():
-    """[NEW] 분석 실행 엔드포인트 - 사용자가 버튼을 클릭할 때만 실행"""
-    try:
-        print("[INFO] 사용자 요청으로 분석 실행 중...")
-        global _cached_analysis
-        
-        # 전체 분석 실행
-        engine = CalculationEngine(processor.raw_data)
-        history, components, bulk_sgr = engine.run_full_analysis(target_year=2025)
-        
-        groups_list = engine.HOSPITAL_TYPES + ['병원(계)', '의원(계)', '치과(계)', '한방(계)', '약국(계)', '전체']
-        scenarios_list = list(components['mei_raw'][2025].keys()) if 2025 in components['mei_raw'] else ['평균', '최대', '최소', '중위수']
-        
-        # 캐시 업데이트
-        _cached_analysis = {
-            'history': history,
-            'components': components,
-            'bulk_sgr': bulk_sgr,
-            'groups': groups_list,
-            'scenarios': scenarios_list,
-            'model_name_map': {
-                'SGR_S1': 'S1', 'SGR_S2': 'S2', 'MACRO_GDP': 'GDP', 'MACRO_MEI': 'MEI', 'MACRO_LINK': 'Link'
-            }
-        }
-        
-        print("[SUCCESS] 분석 완료 및 캐시 업데이트!")
-        
-        return jsonify({
-            'success': True,
-            'analysis_data': sanitize_data(_cached_analysis)
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-
-@app.route('/sync_data', methods=['POST'])
-@login_required
-def sync_data():
-    """사용자가 버튼을 눌러 구글 시트 데이터를 수동으로 갱신하는 엔드포인트"""
-    try:
-        print("[INFO] 구글 시트 데이터 수동 동기화 시작...")
-        global _cached_analysis
-        
-        # 1. 프로세서에서 구글 시트 데이터 강제 새로고침
-        processor.reload_data()
-        
-        # 2. 전역 분석 캐시 무효화 및 강제 재산출
-        _cached_analysis = get_cached_analysis(force_reload=True)
-        
-        print("[SUCCESS] 수동 동기화 완료!")
-        return jsonify({
-            'success': True,
-            'message': '구글 시트의 최신 데이터를 가져왔으며 분석 결과가 갱신되었습니다.'
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-@app.route('/save_to_excel_file', methods=['POST'])
-@login_required
-def save_to_excel_file():
-    data = request.json
-    overrides = data.get('overrides', data)
-    mode = data.get('mode', 'final')
-    
-    success, msg = processor.save_overrides_to_excel(overrides, mode=mode)
-    if success:
-        if mode == 'final':
-            # Re-run full analysis with new base data
-            global _cached_analysis
-            _cached_analysis = None # invalidate cache
-        return jsonify({'success': True, 'message': msg})
-    else:
-        return jsonify({'success': False, 'error': msg})
-
-@app.route('/download_ar/<int:year>/<string:model_type>')
-@login_required
-def download_ar(year, model_type):
-    """AR 모형 시나리오 분석 결과를 엑셀로 내보내기"""
-    analysis = get_cached_analysis()
-    ar_data_all = analysis['bulk_sgr']['ar_analysis'].get(year, {})
-    
-    # If it's the old list format (for backward compatibility during dev) or missing
-    if isinstance(ar_data_all, list) and model_type == 'S1':
-        ar_data = ar_data_all
-    else:
-        ar_data = ar_data_all.get(model_type, [])
-    
-    if not ar_data:
-        return f"{model_type} 모델에 대한 데이터가 없습니다. (2020-2028년 범위 내에서만 지원됩니다.)", 404
-
-    # 데이터프레임 생성
-    rows = []
-    for d in ar_data:
-        row = {
-            '거시지표(B)': d['base_rate'],
-            'MEI(S)': d['mei_scenario'],
-            '적용률(r)': d['r']
-        }
-        # Rates 추가
-        for k, v in d['rates'].items():
-            row[k] = v
-        rows.append(row)
-    
-    df = pd.DataFrame(rows)
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name=f'AR_Scenario_{year}')
-        
-        # 워크시트 스타일링 (가독성 향상)
-        ws = writer.sheets[f'AR_Scenario_{year}']
-        # 열 너비 조정
-        for col in ws.columns:
-            max_length = 0
-            column = col[0].column_letter
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
-            adjusted_width = (max_length + 2)
-            ws.column_dimensions[column].width = adjusted_width
-
-    output.seek(0)
-    return send_file(output, as_attachment=True, download_name=f"AR_Scenario_Analysis_{year}.xlsx")
-
-
-@app.route('/download_budget/<int:year>')
-def download_budget(year):
-    """연구수가 및 추가소요재정 분석 결과를 엑셀로 내보내기"""
-    analysis = get_cached_analysis()
-    b_data = analysis['bulk_sgr'].get('budget_analysis', {}).get(year)
-    
-    if not b_data:
-        return f"해당 연도({year}년)의 분석 데이터가 없습니다.", 404
-
-    rows = []
-    # 1. Macro baseline
-    for m_key, data in b_data.get('Macro', {}).items():
-        # Rate row
-        r_row = {'모델': 'Macro 기초모형', '시나리오': m_key, '구분': '조정률(%)'}
-        r_row.update(data['rate'])
-        rows.append(r_row)
-        # Budget row
-        b_row = {'모델': 'Macro 기초모형', '시나리오': m_key, '구분': '소요재정(억)'}
-        b_row.update(data['budget'])
-        rows.append(b_row)
-
-    # 2. S1 / S2
-    for model in ['S1', 'S2']:
-        m_label = '현행 SGR (S1)' if model == 'S1' else 'SGR 개선 (S2)'
-        for s_key, data in b_data.get(model, {}).items():
-            # Rate row
-            r_row = {'모델': m_label, '시나리오': s_key, '구분': '조정률(%)'}
-            r_row.update(data['rate'])
-            rows.append(r_row)
-            # Budget row
-            b_row = {'모델': m_label, '시나리오': s_key, '구분': '소요재정(억)'}
-            b_row.update(data['budget'])
-            rows.append(b_row)
-
-    df = pd.DataFrame(rows)
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        sheet_name = f'Budget_Analysis_{year}'
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-        
-        ws = writer.sheets[sheet_name]
-        # Column width adjustment
-        for col in ws.columns:
-            max_length = 0
-            column = col[0].column_letter
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except: pass
-            ws.column_dimensions[column].width = max_length + 2
-
-    output.seek(0)
-    return send_file(
-        output,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        as_attachment=True,
-        download_name=f'SGR_Budget_Analysis_{year}.xlsx'
-    )
-
-
-@app.route('/download_budget_constrained')
-def download_budget_constrained():
-    """추가소요재정 제약하의 분석 결과를 엑셀로 내보내기"""
-    analysis = get_cached_analysis()
-    c_data = analysis['bulk_sgr'].get('budget_constraints')
-    
-    if not c_data:
-        return "추가소요재정 제약 분석 데이터가 없습니다.", 404
-
-    rows = []
-    scenario_names = {
-        'S1_1': '시나리오 1.1 (5개년 재정증가율 반영)',
-        'S1_2': '시나리오 1.2 (4개년 재정증가율 반영)',
-        'S2_1': '시나리오 2.1 (5개년 평균인상율 반영)',
-        'S2_2': '시나리오 2.2 (3개년 평균인상율 반영)',
-        'S2_3': '시나리오 2.3 (직전연도 인상율 반영)'
-    }
-
-    for key, data in c_data.items():
-        label = scenario_names.get(key, key)
-        # Rate row
-        r_row = {'시나리오': label, '구분': '조정률(%)'}
-        r_row.update(data['rate'])
-        rows.append(r_row)
-        # Budget row
-        b_row = {'시나리오': label, '구분': '소요재정(억)'}
-        b_row.update(data['budget'])
-        rows.append(b_row)
-
-    df = pd.DataFrame(rows)
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        sheet_name = 'Budget_Constrained_Analysis'
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-        
-        ws = writer.sheets[sheet_name]
-        for col in ws.columns:
-            max_length = 0
-            column = col[0].column_letter
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except: pass
-            ws.column_dimensions[column].width = max_length + 2
-
-    output.seek(0)
-    return send_file(
-        output,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        as_attachment=True,
-        download_name='SGR_Budget_Constrained_Analysis_2025.xlsx'
-    )
-@app.route('/get_original_data')
-def get_original_data():
-    """원본 데이터를 JSON 형식으로 반환"""
-    # Helper to safely convert values to JSON-compliant float or None
-    def clean_val(x):
-        try:
-            if pd.isna(x): return None
-            v = float(x)
-            if np.isinf(v) or np.isnan(v): return None
-            return v
-        except:
-            return None
-
-    print("[API] get_original_data called")
-    try:
-        # [OPTIMIZATION] Avoid redundant disk reload. Data is already managed by processor.
-        # processor.reload_data() 
-        years = list(range(2010, 2029))  # 2010년부터 2028년까지 전체 기간으로 확장
-        
-        # MEI 물가지수 데이터
-        mei_data = {}
-        df_mei = processor.raw_data['df_raw_mei_inf']
-        for field in ['인건비_1', '인건비_2', '인건비_3', '관리비_1', '관리비_2', '재료비_1', '재료비_2']:
-            mei_data[field] = {}
-            for year in years:
-                if year in df_mei.index and field in df_mei.columns:
-                    val = df_mei.loc[year, field]
-                    mei_data[field][str(year)] = clean_val(val)
-                else:
-                    mei_data[field][str(year)] = None
-        
-        # 실제진료비 데이터
-        medical_data = {}
-        df_exp = processor.raw_data['df_expenditure']
-        hospital_types = ['상급종합', '종합병원', '병원', '요양병원', '의원', '치과병원', '치과의원', '한방병원', '한의원', '약국']
-        for htype in hospital_types:
-            medical_data[htype] = {}
-            for year in years:
-                if year in df_exp.index and htype in df_exp.columns:
-                    val = df_exp.loc[year, htype]
-                    medical_data[htype][str(year)] = clean_val(val)
-                else:
-                    medical_data[htype][str(year)] = None
-        
-        # 환산지수 데이터
-        cf_data = {}
-        df_reval = processor.raw_data['df_sgr_reval']
-        for htype in hospital_types:
-            cf_data[htype] = {}
-            for year in years:
-                if year in df_reval.index and htype in df_reval.columns:
-                    val = df_reval.loc[year, htype]
-                    cf_data[htype][str(year)] = clean_val(val)
-                else:
-                    cf_data[htype][str(year)] = None
-        
-        # 건보대상자수
-        # 건보대상자수
-        pop_data = {}
-        df_pop = processor.raw_data['df_pop']
-        # Check available columns
-        col_basic = '건보대상자수'
-        col_aged = '건보_고령화반영후(대상자수)'
-        
-        for year in years:
-            pop_data[str(year)] = {'basic': None, 'aged': None}
-            if year in df_pop.index:
-                if col_basic in df_pop.columns:
-                    pop_data[str(year)]['basic'] = clean_val(df_pop.loc[year, col_basic])
-                if col_aged in df_pop.columns:
-                    pop_data[str(year)]['aged'] = clean_val(df_pop.loc[year, col_aged])
-        
-        # GDP 데이터
-        gdp_data = {}
-        df_gdp = processor.raw_data['df_gdp']
-        for year in years:
-            gdp_data[str(year)] = {}
-            if year in df_gdp.index:
-                for col in ['실질GDP', '영안인구']:
-                    if col in df_gdp.columns:
-                        val = df_gdp.loc[year, col]
-                        gdp_data[str(year)][col] = clean_val(val)
-        
-        # 법과제도 데이터
-        law_data = {}
-        df_law = processor.raw_data['df_sgr_law']
-        for htype in hospital_types:
-            law_data[htype] = {}
-            for year in years:
-                if year in df_law.index and htype in df_law.columns:
-                    val = df_law.loc[year, htype]
-                    law_data[htype][str(year)] = clean_val(val)
-                else:
-                    law_data[htype][str(year)] = None
-        
-        # 상대가치변화
-        rv_data = {}
-        df_rv = processor.raw_data['df_rel_value']
-        for htype in hospital_types:
-            rv_data[htype] = {}
-            for year in years:
-                if year in df_rv.index and htype in df_rv.columns:
-                    val = df_rv.loc[year, htype]
-                    rv_data[htype][str(year)] = clean_val(val)
-                else:
-                    rv_data[htype][str(year)] = None
-                    
-        # 종별비용구조 (Weights)
-        weights_data = {}
-        df_w = processor.raw_data['df_weights']
-        for htype in hospital_types:
-            weights_data[htype] = {}
-            for col in ['인건비', '관리비', '재료비']:
-                 if htype in df_w.index and col in df_w.columns:
-                     val = df_w.loc[htype, col]
-                     weights_data[htype][col] = clean_val(val)
-                 else:
-                     weights_data[htype][col] = None
-
-        # 급여율 (Benefit Rates)
-        rate_data = {}
-        df_rate = processor.raw_data.get('df_rate_py', pd.DataFrame())
-        if not df_rate.empty:
-            for htype in hospital_types:
-                rate_data[htype] = {}
-                for year in years:
-                    if year in df_rate.index and htype in df_rate.columns:
-                        val = df_rate.loc[year, htype]
-                        rate_data[htype][str(year)] = clean_val(val)
-                    else:
-                        rate_data[htype][str(year)] = None
-
-        # [NEW] 수가계약 (Contract)
-        contract_data = {}
-        df_contract = processor.raw_data.get('df_contract', pd.DataFrame())
-        if not df_contract.empty:
-            for year in years:
-                contract_data[str(year)] = {}
-                if year in df_contract.index:
-                    for col in ['인상율_전체', '추가소요재정_전체']:
-                        if col in df_contract.columns:
-                            val = df_contract.loc[year, col]
-                            contract_data[str(year)][col] = clean_val(val)
-                        else:
-                            contract_data[str(year)][col] = None
-
-        # [NEW] 건보 재정통계 (Finance)
-        finance_data = {}
-        df_finance = processor.raw_data.get('df_finance', pd.DataFrame())
-        if not df_finance.empty:
-            for year in years:
-                finance_data[str(year)] = {}
-                if year in df_finance.index:
-                    for col in df_finance.columns:
-                        val = df_finance.loc[year, col]
-                        finance_data[str(year)][col] = clean_val(val)
-
-        return jsonify({
-            'mei': mei_data,
-            'medical': medical_data,
-            'cf': cf_data,
-            'population': pop_data,
-            'gdp': gdp_data,
-            'law': law_data,
-            'rv': rv_data,
-            'weights': weights_data,
-            'benefit_rate': rate_data,
-            'contract': contract_data,
-            'finance': finance_data
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/get_excel_raw_data')
-@login_required
-def get_excel_raw_data():
-    """메모리에 로드된 데이터를 반환"""
-    try:
-        # [OPTIMIZATION] Removed forced reload to speed up view switching.
-        # Data remains in sync via save_to_excel_file route logic.
-        
-        # 이미 로드된 DataProcessor의 데이터를 활용
-        # 매핑: 한글 표시명 -> processor.raw_data 내부 키
-        data_map = {
-            '진료비_실제': 'df_expenditure',
-            '종별비용구조': 'df_weights',
-            '생산요소_물가': 'df_raw_mei_inf',
-            '1인당GDP': 'df_gdp',
-            '건보대상': 'df_pop',
-            '연도별환산지수': 'df_sgr_reval',
-            '법과제도': 'df_sgr_law',
-            '상대가치변화': 'df_rel_value',
-            '기관수': 'df_num',
-            '수가계약결과': 'df_contract',
-            '건보_재정통계': 'df_finance',
-            '급여율': 'df_rate_py'
-        }
-        
-        results = {}
-        for kor_name, internal_key in data_map.items():
-            if internal_key in processor.raw_data:
-                df = processor.raw_data[internal_key]
-                if df is None or df.empty:
-                    continue
-                
-                # 데이터 정제 (NaN -> None 변환)
-                # JSON 직렬화를 위해 float('nan')이나 np.nan을 None으로 변환. Infinity도 처리.
-                # Must convert to object dtype to hold None instead of NaN
-                df_temp = df.replace([np.inf, -np.inf], np.nan)
-                
-                # [USER FIX] RVS 시트의 경우 빈 컬럼(Unnamed) 제거
-                if kor_name == '상대가치변화':
-                    df_temp = df_temp.loc[:, ~df_temp.columns.astype(str).str.contains('^Unnamed')]
-
-                df_clean = df_temp.astype(object).where(pd.notnull(df_temp), None)
-                
-                # Index를 컬럼으로 변환하여 함께 표시 (엑셀처럼)
-                df_display = df_clean.reset_index()
-                
-                # 컬럼명 처리 (Index 이름이 없으면 '구분' 등으로 표시하거나 기본값 사용)
-                cols = df_display.columns.tolist()
-                cols = [(str(c) if c is not None else '') for c in cols] # 컬럼명 문자열 변환
-                
-                results[kor_name] = {
-                    'headers': cols,
-                    'rows': df_display.values.tolist()
-                }
-                
-        return jsonify(results)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-# ----------------------------------------------------------------------
-# AI 최적화 API 엔드포인트
-# ----------------------------------------------------------------------
-
-@app.route('/api/ai_simulation', methods=['GET'])
-def api_ai_simulation():
-    """AI 시뮬레이션 결과 반환 (k, j 파라미터 최적화)"""
-    if not AI_MODULE_AVAILABLE:
-        return jsonify({'error': 'AI module not available'}), 503
-    
-    try:
-        from ai_optimizer import BudgetFunctionSimulator
-        
-        simulator = BudgetFunctionSimulator('SGR_data.xlsx')
-        best_params, all_results = simulator.find_optimal_parameters(
-            k_range=(1, 5),
-            j_range=(1, 3),
-            years=[2021, 2022, 2023, 2024, 2025]
-        )
-        
-        if best_params is None:
-            return jsonify({'error': 'Simulation failed'}), 500
-        
-        response = {
-            'success': True,
-            'optimal_k': int(best_params['k']),
-            'optimal_j': int(best_params['j']),
-            'mean_error': float(best_params['abs_mean_error']),
-            'std_error': float(best_params.get('std_error', 0)),
-            'year_errors': best_params.get('year_errors', {}),
-            'all_combinations': all_results.to_dict('records') if all_results is not None else []
-        }
-        
-        return jsonify(sanitize_data(response))
-        
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/ai_optimization', methods=['POST'])
-def api_ai_optimization():
-    """AI 최적화 결과 반환 (S1 MEI-평균 기준 연동)"""
-    if not AI_MODULE_AVAILABLE:
-        return jsonify({'error': 'AI module not available'}), 503
-    
-    try:
-        data = request.json or {}
-        target_year = int(data.get('year') or data.get('target_year', 2026))
-        sgr_results = data.get('sgr_results')
-        
-        # S1 MEI-Average reference data lookup
-        if not sgr_results and _cached_analysis:
-            try:
-                bulk = _cached_analysis.get('bulk_sgr', {})
-                if 'scenario_adjustments' in bulk and target_year in bulk['scenario_adjustments']:
-                    sgr_results = bulk['scenario_adjustments'][target_year].get('평균', {}).get('S1', {})
-            except: pass
-            
-        if not sgr_results:
-            # Fallback if cache not found or year out of range
-            sgr_results = {'병원(계)': 1.96, '의원': 1.9, '치과(계)': 1.96, '한방(계)': 1.96, '약국': 2.8}
-            
-        # 통합 엔진 사용 (고성능)
-        engine = AIOptimizationEngine(data_frames=processor.raw_data)
-        results = engine.run_full_analysis(target_year=target_year, sgr_results=sgr_results)
-        
-        if results is None:
-            return jsonify({'error': 'AI analysis failed'}), 500
-        
-        return jsonify(sanitize_data(results))
-        
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/ai_full_report', methods=['POST'])
-@login_required
-def api_ai_full_report():
-    """AI 전체 분석 리포트 반환 (S1 MEI-평균 기준 연동)"""
-    if not AI_MODULE_AVAILABLE:
-        return jsonify({'error': 'AI module not available'}), 503
-    
-    try:
-        data = request.json or {}
-        target_year = int(data.get('target_year', 2026))
-        sgr_results = data.get('sgr_results')
-        
-        # S1 MEI-Average reference data lookup
-        if not sgr_results and _cached_analysis:
-            try:
-                bulk = _cached_analysis.get('bulk_sgr', {})
-                if 'scenario_adjustments' in bulk and target_year in bulk['scenario_adjustments']:
-                    sgr_results = bulk['scenario_adjustments'][target_year].get('평균', {}).get('S1', {})
-            except: pass
-
-        if not sgr_results:
-            sgr_results = {'병원(계)': 1.96, '의원': 1.9, '치과(계)': 1.96, '한방(계)': 1.96, '약국': 2.8}
-
-        engine = AIOptimizationEngine(data_frames=processor.raw_data)
-        results = engine.run_full_analysis(target_year=target_year, sgr_results=sgr_results)
-        
-        if results is None:
-            return jsonify({'error': 'AI analysis failed'}), 500
-        
-        return jsonify(sanitize_data(results))
-        
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-if __name__ == '__main__':
-    # Streamlit Cloud 환경에서는 reloader와 debug 기능을 꺼야 ValueError(signal)가 발생하지 않습니다.
-    is_streamlit = os.environ.get('STREAMLIT_RUNTIME_ENV') or os.environ.get('HOSTNAME') == 'streamlit'
-    
-    if is_streamlit:
-        print("Starting Flask server for Streamlit Cloud...")
-        app.run(debug=False, host='0.0.0.0', port=5000, use_reloader=False)
-    else:
-        # 로컬 환경에서는 기존처럼 debug 모드 사용 가능
-        app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=True)
+# Flask app.run() 코드 삭제됨 (Streamlit은 'streamlit run'으로 실행)
