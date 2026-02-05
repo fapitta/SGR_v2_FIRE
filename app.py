@@ -32,6 +32,13 @@ def get_secret(key, default=None):
     """
     스트림릿 클라우드(st.secrets), 환경 변수, 혹은 로컬(.streamlit/secrets.toml)에서 정보를 읽어옴
     """
+    # 1. Streamlit Secrets 확인 (가장 높은 우선순위)
+    try:
+        keys = key.split('.')
+        val = st.secrets
+        for k in keys:
+            val = val[k]
+        return val
     except:
         pass
 
@@ -1841,9 +1848,12 @@ def main_app():
 
 def main():
     st.set_page_config(page_title="SGR v2 FIRE", layout="wide")
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
-    if not st.session_state.logged_in:
+    
+    # 세션 상태 초기화
+    if 'email' not in st.session_state:
+        st.session_state['email'] = None
+        
+    if not st.session_state['email']:
         login_screen()
     else:
         main_app()
