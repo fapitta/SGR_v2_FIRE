@@ -7,3 +7,4 @@ openpyxl
 requests
 firebase-admin
 toml
+plotly
