@@ -6,3 +6,4 @@ scipy
 openpyxl
 requests
 firebase-admin
+toml
