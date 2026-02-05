@@ -2267,4 +2267,12 @@ def api_ai_full_report():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=True)
+    # Streamlit Cloud 환경에서는 reloader와 debug 기능을 꺼야 ValueError(signal)가 발생하지 않습니다.
+    is_streamlit = os.environ.get('STREAMLIT_RUNTIME_ENV') or os.environ.get('HOSTNAME') == 'streamlit'
+    
+    if is_streamlit:
+        print("Starting Flask server for Streamlit Cloud...")
+        app.run(debug=False, host='0.0.0.0', port=5000, use_reloader=False)
+    else:
+        # 로컬 환경에서는 기존처럼 debug 모드 사용 가능
+        app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=True)
